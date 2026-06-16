@@ -89,9 +89,27 @@ class RuleSpec:
 _INLINE_CONSTRAINT_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*),[^{}]*\}")
 
 
-def _strip_inline_constraints(pattern: str) -> str:
-    """Strip ``{name,regex}`` -> ``{name}`` from a Snakemake output pattern."""
-    return _INLINE_CONSTRAINT_RE.sub(r"{\1}", pattern)
+def _strip_inline_constraints(pattern: str) -> tuple[str, dict[str, str]]:
+    """Strip ``{name,regex}`` -> ``{name}`` from a Snakemake output pattern.
+
+    Returns a tuple of ``(stripped_pattern, inline_constraints)`` where
+    ``inline_constraints`` maps each inline-annotated wildcard name to its
+    regex body. Snakemake stores the raw pattern with the inline regex in
+    ``rule.output`` but does NOT populate it into ``rule.wildcard_constraints``,
+    so callers need this dict to recover the constraint information that would
+    otherwise be discarded.
+    """
+    constraints: dict[str, str] = {}
+
+    def _record(match: re.Match[str]) -> str:
+        name = match.group(1)
+        # Match group 0 is "{name,body}"; drop "{name," and trailing "}".
+        body = match.group(0)[len(name) + 2 : -1]
+        constraints[name] = body
+        return "{" + name + "}"
+
+    stripped = _INLINE_CONSTRAINT_RE.sub(_record, pattern)
+    return stripped, constraints
 
 
 def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
@@ -99,9 +117,12 @@ def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
 
     Each rule contributes a :class:`RuleSpec` with its name, the raw output
     pattern strings (with any inline ``{name,regex}`` constraint annotations
-    stripped), and the effective wildcard constraints (rule-local overriding
-    workflow-global).
+    stripped), and the effective wildcard constraints. Precedence, low-to-high:
+    workflow-global < inline ``{name,regex}`` annotations on this rule's
+    outputs < rule-local ``wildcard_constraints`` block.
     """
+    import tempfile
+
     snakefile = resolve_snakefile(pipeline_dir)
 
     # Local imports so the package can be imported without snakemake installed.
@@ -115,13 +136,17 @@ def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
         WorkflowSettings,
     )
 
-    with SnakemakeApi(OutputSettings(quiet={Quietness.ALL})) as api:
+    with (
+        tempfile.TemporaryDirectory() as tmp_workdir,
+        SnakemakeApi(OutputSettings(quiet={Quietness.ALL})) as api,
+    ):
         workflow_api = api.workflow(
             resource_settings=ResourceSettings(),
             config_settings=ConfigSettings(),
             storage_settings=StorageSettings(),
             workflow_settings=WorkflowSettings(),
             snakefile=snakefile,
+            workdir=Path(tmp_workdir),
         )
         # Snakemake 9's WorkflowApi parses the Snakefile lazily; accessing the
         # underlying ``_workflow`` after constructing the WorkflowApi gives us
@@ -132,10 +157,23 @@ def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
 
         specs: list[RuleSpec] = []
         for rule in workflow.rules:
-            raw_outputs = [_strip_inline_constraints(str(o)) for o in rule.output]
+            raw_outputs: list[str] = []
+            inline_constraints: dict[str, str] = {}
+            for o in rule.output:
+                stripped, inline = _strip_inline_constraints(str(o))
+                raw_outputs.append(stripped)
+                # Last inline annotation wins if a wildcard is annotated more
+                # than once across this rule's outputs; rule-local declarations
+                # override below regardless.
+                inline_constraints.update(inline)
             rule_constraints = dict(getattr(rule, "wildcard_constraints", {}) or {})
-            # Merge: rule-local overrides workflow-global.
-            effective = {**global_constraints, **rule_constraints}
+            # Merge precedence (low -> high):
+            #   workflow-global  <  inline {name,regex}  <  rule-local
+            effective = {
+                **global_constraints,
+                **inline_constraints,
+                **rule_constraints,
+            }
             specs.append(
                 RuleSpec(name=rule.name, outputs=raw_outputs, constraints=effective)
             )

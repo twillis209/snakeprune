@@ -127,3 +127,58 @@ def test_load_rule_specs_global_constraints_visible(make_pipeline):
     )
     specs = load_rule_specs(pipeline)
     assert specs[0].constraints.get("x") == "[0-9]+"
+
+
+def test_load_rule_specs_inline_constraint_captured(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x,[0-9]+}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = load_rule_specs(pipeline)
+    assert specs[0].outputs == ["results/{x}.txt"]
+    assert specs[0].constraints.get("x") == "[0-9]+"
+
+
+def test_load_rule_specs_inline_constraint_overridden_by_rule_local(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x,[0-9]+}.txt'\n"
+        "    wildcard_constraints:\n"
+        "        x = r'[ab]+'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = load_rule_specs(pipeline)
+    # Rule-local declared constraint wins over inline annotation
+    assert specs[0].constraints.get("x") == "[ab]+"
+
+
+def test_load_rule_specs_multiple_rules(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/a.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "\n"
+        "rule b:\n"
+        "    output: 'results/b.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = load_rule_specs(pipeline)
+    names = sorted(s.name for s in specs)
+    assert names == ["a", "b"]
+
+
+def test_load_rule_specs_does_not_pollute_cwd(make_pipeline, tmp_path, monkeypatch):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    # Snapshot dir contents before
+    before = set(tmp_path.iterdir())
+    load_rule_specs(pipeline)
+    after = set(tmp_path.iterdir())
+    new_entries = after - before
+    # Should not have created a .snakemake/ in CWD
+    assert not any(p.name == ".snakemake" for p in new_entries)
