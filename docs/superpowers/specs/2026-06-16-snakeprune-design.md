@@ -19,9 +19,9 @@ This is more robust than text-parsing `.smk` files because it correctly handles 
 
 ### `patterns.py` — Pattern extraction
 
-Given a Snakefile path, returns a list of `(rule_name, compiled_regex)` tuples covering every output spec in the workflow.
+Given a pipeline directory, returns a list of `(rule_name, compiled_regex)` tuples covering every output spec in the workflow.
 
-- **Inputs:** path to the project's main Snakefile (Snakemake handles `include:` resolution).
+- **Inputs:** path to the pipeline directory (the directory containing the `Snakefile` and any `.smk` rule files or their containing subdirectories). The Snakefile is resolved by looking for `Snakefile` directly inside this directory, falling back to `workflow/Snakefile` (Snakemake's recommended layout). Snakemake's `include:` resolver handles the rest from the entry point.
 - **Output:** `list[tuple[str, re.Pattern]]`.
 - **Internals:** loads the workflow via Snakemake's API, iterates over `workflow.rules`, expands each rule's output list (`multiext()` outputs expand to multiple distinct patterns), then for each output string substitutes every `{wildcard}` with its regex body. The regex body comes from rule-local `wildcard_constraints` if present, else workflow-global `wildcard_constraints`, else the default `[^/]+`.
 
@@ -42,13 +42,15 @@ Given a list of orphans, unlinks them one at a time. Refuses to operate on symli
 Single subcommand for MVP:
 
 ```
-snakeprune scan <snakefile> <results_dir>
+snakeprune scan <pipeline_dir> <results_dir>
     [--delete]                # actually unlink orphans; default is dry-run
     [--rule-attribution]      # show best-guess rule per orphan
     [--ignore PATTERN]        # repeatable; glob patterns to skip
     [--follow-symlinks]       # default skip
     [--quiet]                 # don't print live files
 ```
+
+`<pipeline_dir>` is the directory containing the Snakefile (and `.smk` rule files or their subdirectories). The CLI resolves the entry point as `<pipeline_dir>/Snakefile`, falling back to `<pipeline_dir>/workflow/Snakefile` (Snakemake's recommended layout). Errors out with an actionable message if neither is found.
 
 Default behaviour is dry-run: list orphans, take no destructive action.
 
@@ -70,6 +72,7 @@ Default behaviour is dry-run: list orphans, take no destructive action.
 | Dynamic outputs via lambda or function | Pattern extraction may not see these; reported as a warning, those rules are skipped. |
 | Wildcard not declared in any `wildcard_constraints` | Falls back to `[^/]+`. |
 | Files in `results/` but produced manually (logs, notes) | User adds `--ignore` patterns to exclude them. |
+| `<pipeline_dir>` has no Snakefile at either `Snakefile` or `workflow/Snakefile` | Exit with an actionable error message naming both checked paths. |
 | Empty `results/` directory | Returns empty orphan list, exits successfully. |
 
 ## Non-goals (MVP)
