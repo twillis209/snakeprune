@@ -33,3 +33,28 @@ def wildcard_pattern_to_regex(pattern: str, constraints: dict[str, str]) -> str:
         cursor = match.end()
     parts.append(re.escape(pattern[cursor:]))
     return "^" + "".join(parts) + "$"
+
+
+from pathlib import Path
+
+
+class SnakefileNotFound(FileNotFoundError):
+    """Raised when no Snakefile exists at either standard location."""
+
+
+def resolve_snakefile(pipeline_dir: Path) -> Path:
+    """Find the Snakefile in `pipeline_dir`.
+
+    Checks `<pipeline_dir>/Snakefile` first, then `<pipeline_dir>/workflow/Snakefile`
+    (Snakemake's recommended layout). Raises `SnakefileNotFound` if neither exists.
+    """
+    candidates = [pipeline_dir / "Snakefile", pipeline_dir / "workflow" / "Snakefile"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise SnakefileNotFound(
+        "No Snakefile found at either:\n"
+        f"  {candidates[0]}\n"
+        f"  {candidates[1]}\n"
+        "Pass --pipeline-dir pointing at the directory containing your Snakefile."
+    )

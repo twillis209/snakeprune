@@ -73,3 +73,29 @@ def test_repeated_wildcard_with_constraint_uses_backreference():
     assert pat.match("123/123.csv")
     assert not pat.match("123/456.csv")
     assert not pat.match("abc/abc.csv")
+
+
+import pytest
+from snakeprune.patterns import resolve_snakefile, SnakefileNotFound
+
+
+def test_resolve_snakefile_direct(make_pipeline):
+    pipeline = make_pipeline("rule all:\n    input: []\n")
+    assert resolve_snakefile(pipeline) == pipeline / "Snakefile"
+
+
+def test_resolve_snakefile_workflow_layout(tmp_path):
+    pipeline = tmp_path / "p"
+    (pipeline / "workflow").mkdir(parents=True)
+    (pipeline / "workflow" / "Snakefile").write_text("rule all:\n    input: []\n")
+    assert resolve_snakefile(pipeline) == pipeline / "workflow" / "Snakefile"
+
+
+def test_resolve_snakefile_missing_raises(tmp_path):
+    pipeline = tmp_path / "empty"
+    pipeline.mkdir()
+    with pytest.raises(SnakefileNotFound) as exc:
+        resolve_snakefile(pipeline)
+    msg = str(exc.value)
+    assert str(pipeline / "Snakefile") in msg
+    assert str(pipeline / "workflow" / "Snakefile") in msg
