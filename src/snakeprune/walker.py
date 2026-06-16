@@ -34,3 +34,33 @@ def iter_results_files(
         if ignore_globs and _matches_any_glob(rel, ignore_globs):
             continue
         yield path
+
+
+from dataclasses import dataclass
+import re
+
+from snakeprune.patterns import find_rule_patterns
+
+
+@dataclass(frozen=True)
+class OrphanFile:
+    path: Path
+    likely_rule: str | None = None
+
+
+def find_orphans(
+    pipeline_dir: Path,
+    results_dir: Path,
+    ignore_globs: Iterable[str] = (),
+    follow_symlinks: bool = False,
+) -> list[OrphanFile]:
+    """Return regular files under `results_dir` that match no rule output pattern."""
+    patterns = find_rule_patterns(pipeline_dir)
+    orphans: list[OrphanFile] = []
+    for path in iter_results_files(results_dir, ignore_globs=ignore_globs, follow_symlinks=follow_symlinks):
+        # Rule output patterns are written relative to the project root (e.g. "results/..."),
+        # so match against `results_dir.name + "/" + relative path from results_dir`.
+        match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
+        if not any(p.match(match_target) for _, p in patterns):
+            orphans.append(OrphanFile(path=path))
+    return orphans

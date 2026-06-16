@@ -41,3 +41,39 @@ def test_iter_results_files_directories_not_returned(make_results):
     results = make_results(["sub/a.txt"])
     for p in iter_results_files(results):
         assert p.is_file()
+
+
+from snakeprune.walker import find_orphans, OrphanFile
+
+
+def test_find_orphans_distinguishes_live_and_orphan(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "2.txt", "obsolete/3.txt"])
+    orphans = find_orphans(pipeline, results)
+    rel = sorted(o.path.relative_to(results).as_posix() for o in orphans)
+    assert rel == ["obsolete/3.txt"]
+
+
+def test_find_orphans_empty_results(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results([])
+    assert find_orphans(pipeline, results) == []
+
+
+def test_find_orphans_ignore_globs_excluded_from_orphan_set(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "notes/manual.md"])
+    orphans = find_orphans(pipeline, results, ignore_globs=["notes/**"])
+    assert orphans == []
