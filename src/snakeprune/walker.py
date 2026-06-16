@@ -48,19 +48,45 @@ class OrphanFile:
     likely_rule: str | None = None
 
 
+def _attribute_rule(target: str, patterns: list[tuple[str, re.Pattern]]) -> str | None:
+    """Best-effort guess: the rule whose output pattern shares the longest literal
+    prefix with `target`. Falls back to None if no rule shares a meaningful prefix.
+    """
+    best_rule: str | None = None
+    best_prefix_len = 0
+    for name, regex in patterns:
+        # Reconstruct the literal prefix by reading regex.pattern up to the first '('
+        # (the first wildcard capture group). Anchored '^' is the first character.
+        literal_prefix = ""
+        body = regex.pattern.lstrip("^")
+        for ch in body:
+            if ch == "(":
+                break
+            literal_prefix += ch
+        # Un-escape: in `re.escape`, '/' is left as-is, so the prefix is a real path prefix
+        # except for '\\' before special characters. Strip backslashes that precede
+        # ASCII non-alphanumeric chars to recover the source path.
+        unescaped = re.sub(r"\\(.)", r"\1", literal_prefix)
+        if target.startswith(unescaped) and len(unescaped) > best_prefix_len:
+            best_prefix_len = len(unescaped)
+            best_rule = name
+    return best_rule
+
+
 def find_orphans(
     pipeline_dir: Path,
     results_dir: Path,
     ignore_globs: Iterable[str] = (),
     follow_symlinks: bool = False,
+    attribute_rules: bool = False,
 ) -> list[OrphanFile]:
     """Return regular files under `results_dir` that match no rule output pattern."""
     patterns = find_rule_patterns(pipeline_dir)
     orphans: list[OrphanFile] = []
     for path in iter_results_files(results_dir, ignore_globs=ignore_globs, follow_symlinks=follow_symlinks):
-        # Rule output patterns are written relative to the project root (e.g. "results/..."),
-        # so match against `results_dir.name + "/" + relative path from results_dir`.
         match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
-        if not any(p.match(match_target) for _, p in patterns):
-            orphans.append(OrphanFile(path=path))
+        if any(p.match(match_target) for _, p in patterns):
+            continue
+        likely = _attribute_rule(match_target, patterns) if attribute_rules else None
+        orphans.append(OrphanFile(path=path, likely_rule=likely))
     return orphans

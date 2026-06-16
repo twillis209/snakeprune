@@ -77,3 +77,18 @@ def test_find_orphans_ignore_globs_excluded_from_orphan_set(make_pipeline, make_
     results = make_results(["1.txt", "notes/manual.md"])
     orphans = find_orphans(pipeline, results, ignore_globs=["notes/**"])
     assert orphans == []
+
+
+def test_find_orphans_with_attribution_guesses_closest_rule(make_pipeline, make_results):
+    # Rule pattern uses two wildcards; orphan file has the right directory structure
+    # but extra path components — should still be attributed to this rule as the
+    # closest match by directory prefix.
+    pipeline = make_pipeline(
+        "rule egene_model:\n"
+        "    output: 'results/exp_models/{panel}/{ensid}.csv'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["exp_models/1kGP/extra_subdir/ENSG001.csv"])
+    orphans = find_orphans(pipeline, results, attribute_rules=True)
+    assert len(orphans) == 1
+    assert orphans[0].likely_rule == "egene_model"
