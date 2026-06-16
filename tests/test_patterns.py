@@ -182,3 +182,40 @@ def test_load_rule_specs_does_not_pollute_cwd(make_pipeline, tmp_path, monkeypat
     new_entries = after - before
     # Should not have created a .snakemake/ in CWD
     assert not any(p.name == ".snakemake" for p in new_entries)
+
+
+from snakeprune.patterns import find_rule_patterns
+
+
+def test_find_rule_patterns_compiles_with_constraints(make_pipeline):
+    pipeline = make_pipeline(
+        "wildcard_constraints:\n"
+        "    n = r'\\d+'\n"
+        "\n"
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    patterns = find_rule_patterns(pipeline)
+    assert len(patterns) == 1
+    name, regex = patterns[0]
+    assert name == "a"
+    assert regex.match("results/123.txt")
+    assert not regex.match("results/abc.txt")
+
+
+def test_find_rule_patterns_multiext_expands(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: multiext('results/{n}', '.txt', '.csv')\n"
+        "    shell: 'touch {output}'\n"
+    )
+    patterns = find_rule_patterns(pipeline)
+    # multiext should expand to two distinct patterns
+    assert len(patterns) == 2
+    matched_extensions = set()
+    for _, regex in patterns:
+        m = regex.match("results/123.txt") or regex.match("results/123.csv")
+        if m:
+            matched_extensions.add("ok")
+    assert "ok" in matched_extensions

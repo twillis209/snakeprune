@@ -179,3 +179,17 @@ def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
             )
 
     return specs
+
+
+def find_rule_patterns(pipeline_dir: Path) -> list[tuple[str, re.Pattern]]:
+    """Top-level: return one (rule_name, compiled_regex) per output pattern.
+
+    Rules with multiple outputs (e.g., multiext) contribute multiple entries, one
+    per output file pattern.
+    """
+    out: list[tuple[str, re.Pattern]] = []
+    for spec in load_rule_specs(pipeline_dir):
+        for output_str in spec.outputs:
+            regex_str = wildcard_pattern_to_regex(output_str, spec.constraints)
+            out.append((spec.name, re.compile(regex_str)))
+    return out
