@@ -41,3 +41,35 @@ def test_regex_special_characters_in_literal_are_escaped():
     # dots, plus signs, brackets in the literal portion must be escaped
     regex = wildcard_pattern_to_regex("results/file.v1+x[y]/{n}.txt", constraints={})
     assert regex == r"^results/file\.v1\+x\[y\]/(?P<n>[^/]+)\.txt$"
+
+
+import re as _re_module
+
+
+def test_constraint_with_alternation_compiles_and_matches_each_alternative():
+    """Constraint body 'x|y' must match 'x' and 'y' but not 'xy' when compiled."""
+    regex_str = wildcard_pattern_to_regex("{a}.txt", constraints={"a": "x|y"})
+    pat = _re_module.compile(regex_str)
+    assert pat.match("x.txt")
+    assert pat.match("y.txt")
+    assert not pat.match("xy.txt")
+
+
+def test_repeated_wildcard_uses_backreference():
+    """A wildcard appearing twice in a pattern produces a named group on first
+    occurrence and a backreference on subsequent occurrences, preserving
+    Snakemake's implicit-equality semantics."""
+    regex_str = wildcard_pattern_to_regex("results/{x}/{x}.txt", constraints={})
+    pat = _re_module.compile(regex_str)
+    assert pat.match("results/abc/abc.txt")
+    assert not pat.match("results/abc/xyz.txt")
+
+
+def test_repeated_wildcard_with_constraint_uses_backreference():
+    regex_str = wildcard_pattern_to_regex(
+        "{n}/{n}.csv", constraints={"n": r"\d+"}
+    )
+    pat = _re_module.compile(regex_str)
+    assert pat.match("123/123.csv")
+    assert not pat.match("123/456.csv")
+    assert not pat.match("abc/abc.csv")
