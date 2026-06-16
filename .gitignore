@@ -8,3 +8,4 @@ dist/
 *.egg
 .venv/
 .DS_Store
+.snakemake/

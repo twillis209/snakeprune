@@ -99,3 +99,31 @@ def test_resolve_snakefile_missing_raises(tmp_path):
     msg = str(exc.value)
     assert str(pipeline / "Snakefile") in msg
     assert str(pipeline / "workflow" / "Snakefile") in msg
+
+
+from snakeprune.patterns import load_rule_specs, RuleSpec
+
+
+def test_load_rule_specs_single_rule(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = load_rule_specs(pipeline)
+    assert len(specs) == 1
+    assert specs[0].name == "a"
+    assert specs[0].outputs == ["results/{x}.txt"]
+
+
+def test_load_rule_specs_global_constraints_visible(make_pipeline):
+    pipeline = make_pipeline(
+        "wildcard_constraints:\n"
+        "    x = r'[0-9]+'\n"
+        "\n"
+        "rule a:\n"
+        "    output: 'results/{x}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = load_rule_specs(pipeline)
+    assert specs[0].constraints.get("x") == "[0-9]+"
