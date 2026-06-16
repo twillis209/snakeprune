@@ -121,8 +121,6 @@ def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
     workflow-global < inline ``{name,regex}`` annotations on this rule's
     outputs < rule-local ``wildcard_constraints`` block.
     """
-    import tempfile
-
     snakefile = resolve_snakefile(pipeline_dir)
 
     # Local imports so the package can be imported without snakemake installed.
@@ -136,17 +134,18 @@ def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
         WorkflowSettings,
     )
 
-    with (
-        tempfile.TemporaryDirectory() as tmp_workdir,
-        SnakemakeApi(OutputSettings(quiet={Quietness.ALL})) as api,
-    ):
+    # workdir is set to pipeline_dir so relative paths in the Snakefile
+    # (configfile:, include:, etc.) resolve as they would for a normal Snakemake
+    # invocation from that directory. A .snakemake/ subdirectory may be created
+    # there as a side effect — same place Snakemake itself would put it.
+    with SnakemakeApi(OutputSettings(quiet={Quietness.ALL})) as api:
         workflow_api = api.workflow(
             resource_settings=ResourceSettings(),
             config_settings=ConfigSettings(),
             storage_settings=StorageSettings(),
             workflow_settings=WorkflowSettings(),
             snakefile=snakefile,
-            workdir=Path(tmp_workdir),
+            workdir=pipeline_dir.resolve(),
         )
         # Snakemake 9's WorkflowApi parses the Snakefile lazily; accessing the
         # underlying ``_workflow`` after constructing the WorkflowApi gives us
