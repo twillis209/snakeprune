@@ -65,15 +65,15 @@ Default behaviour is dry-run: list orphans, take no destructive action.
 
 ## Edge cases
 
-| Case | Handling |
-|------|----------|
-| `multiext()` output spec | Expanded into N distinct patterns (one per file extension). |
-| `directory(...)` output | The directory itself is matched; files inside it are *not* automatically considered live unless they match the directory pattern + further wildcards. |
-| Dynamic outputs via lambda or function | Pattern extraction may not see these; reported as a warning, those rules are skipped. |
-| Wildcard not declared in any `wildcard_constraints` | Falls back to `[^/]+`. |
-| Files in `results/` but produced manually (logs, notes) | User adds `--ignore` patterns to exclude them. |
-| `<pipeline_dir>` has no Snakefile at either `Snakefile` or `workflow/Snakefile` | Exit with an actionable error message naming both checked paths. |
-| Empty `results/` directory | Returns empty orphan list, exits successfully. |
+| Case                                                                            | Handling                                                                                                                                              |
+|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `multiext()` output spec                                                        | Expanded into N distinct patterns (one per file extension).                                                                                           |
+| `directory(...)` output                                                         | The directory itself is matched; files inside it are *not* automatically considered live unless they match the directory pattern + further wildcards. |
+| Dynamic outputs via lambda or function                                          | Pattern extraction may not see these; reported as a warning, those rules are skipped.                                                                 |
+| Wildcard not declared in any `wildcard_constraints`                             | Falls back to `[^/]+`.                                                                                                                                |
+| Files in `results/` but produced manually (logs, notes)                         | User adds `--ignore` patterns to exclude them.                                                                                                        |
+| `<pipeline_dir>` has no Snakefile at either `Snakefile` or `workflow/Snakefile` | Exit with an actionable error message naming both checked paths.                                                                                      |
+| Empty `results/` directory                                                      | Returns empty orphan list, exits successfully.                                                                                                        |
 
 ## Non-goals (MVP)
 
