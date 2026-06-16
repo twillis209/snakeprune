@@ -50,3 +50,50 @@ def test_cli_scan_no_snakefile_fails_cleanly(tmp_path):
     result = runner.invoke(app, ["scan", str(empty), str(results)])
     assert result.exit_code != 0
     assert "Snakefile" in result.stdout or "Snakefile" in (result.stderr or "")
+
+
+def test_cli_scan_emits_progress_by_default(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "Loading Snakemake workflow" in combined
+    assert "Loaded" in combined and "rule output pattern" in combined
+    assert "Walking" in combined
+    assert "Scanned" in combined and "orphan" in combined
+
+
+def test_cli_scan_quiet_suppresses_progress(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obsolete.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--quiet"])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "Loading" not in combined
+    assert "Walking" not in combined
+    assert "Scanned" not in combined
+    # Orphan listing still emitted
+    assert "obsolete.csv" in result.stdout
+
+
+def test_cli_scan_short_q_flag_also_suppresses(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "-q"])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "Loading" not in combined
+    assert "Walking" not in combined

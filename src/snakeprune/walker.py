@@ -48,7 +48,7 @@ class OrphanFile:
     likely_rule: str | None = None
 
 
-def _attribute_rule(target: str, patterns: list[tuple[str, re.Pattern]]) -> str | None:
+def attribute_orphan_to_rule(target: str, patterns: list[tuple[str, re.Pattern]]) -> str | None:
     """Best-effort guess: the rule whose output pattern shares the longest literal
     prefix with `target`. Falls back to None if no rule shares a meaningful prefix.
     """
@@ -87,6 +87,6 @@ def find_orphans(
         match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
         if any(p.match(match_target) for _, p in patterns):
             continue
-        likely = _attribute_rule(match_target, patterns) if attribute_rules else None
+        likely = attribute_orphan_to_rule(match_target, patterns) if attribute_rules else None
         orphans.append(OrphanFile(path=path, likely_rule=likely))
     return orphans

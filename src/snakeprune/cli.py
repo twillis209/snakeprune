@@ -6,9 +6,15 @@ from typing import Optional
 
 import typer
 
-from snakeprune.patterns import SnakefileNotFound
-from snakeprune.walker import find_orphans
 from snakeprune.delete import delete_orphans
+from snakeprune.patterns import SnakefileNotFound, find_rule_patterns
+from snakeprune.walker import (
+    OrphanFile,
+    attribute_orphan_to_rule,
+    iter_results_files,
+)
+
+PROGRESS_INTERVAL = 10000
 
 app = typer.Typer(add_completion=False, help="Find orphan files in a Snakemake results tree.")
 
@@ -27,19 +33,39 @@ def scan(
     ignore: Optional[list[str]] = typer.Option(None, "--ignore", help="Glob pattern to skip; repeatable."),
     follow_symlinks: bool = typer.Option(False, "--follow-symlinks", help="Follow symlinks (default: skip)."),
     allow_symlinks: bool = typer.Option(False, "--allow-symlinks", help="Allow deleting symlinks when --delete is set."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress messages on stderr."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
+
+    def log(msg: str) -> None:
+        if not quiet:
+            typer.echo(msg, err=True)
+
+    log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:
-        orphans = find_orphans(
-            pipeline_dir=pipeline_dir,
-            results_dir=results_dir,
-            ignore_globs=tuple(ignore or ()),
-            follow_symlinks=follow_symlinks,
-            attribute_rules=rule_attribution,
-        )
+        patterns = find_rule_patterns(pipeline_dir)
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
+    log(f"Loaded {len(patterns)} rule output pattern(s).")
+
+    log(f"Walking {results_dir}...")
+    orphans: list[OrphanFile] = []
+    file_count = 0
+    for path in iter_results_files(
+        results_dir,
+        ignore_globs=tuple(ignore or ()),
+        follow_symlinks=follow_symlinks,
+    ):
+        file_count += 1
+        if file_count % PROGRESS_INTERVAL == 0:
+            log(f"  scanned {file_count} files...")
+        match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
+        if any(p.match(match_target) for _, p in patterns):
+            continue
+        likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
+        orphans.append(OrphanFile(path=path, likely_rule=likely))
+    log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
 
     for orphan in orphans:
         line = str(orphan.path)
