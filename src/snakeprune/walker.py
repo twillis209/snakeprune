@@ -1,6 +1,7 @@
 """Walk a results directory and apply ignore/symlink filters."""
 from __future__ import annotations
 
+import os
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -23,17 +24,51 @@ def iter_results_files(
     ignore_globs: Iterable[str] = (),
     follow_symlinks: bool = False,
 ) -> Iterator[Path]:
-    """Yield regular files under `results_dir`, skipping ignored paths and (by default) symlinks."""
+    """Yield regular files under `results_dir`, skipping ignored paths and (by default) symlinks.
+
+    Uses `os.scandir` for traversal so each entry's type can be read from the
+    cached dirent on filesystems that support `d_type`, avoiding the extra
+    `stat` syscalls that `Path.rglob` + `Path.is_file/is_symlink` incur.
+    """
     ignore_globs = tuple(ignore_globs)
-    for path in results_dir.rglob("*"):
-        if path.is_symlink() and not follow_symlinks:
+    base_str = os.fspath(results_dir)
+    base_len = len(base_str) + 1  # length of "<base>/" prefix to strip
+    sep = os.sep
+
+    stack: list[str] = [base_str]
+    while stack:
+        current = stack.pop()
+        try:
+            scandir_it = os.scandir(current)
+        except OSError:
             continue
-        if not path.is_file():
-            continue
-        rel = path.relative_to(results_dir).as_posix()
-        if ignore_globs and _matches_any_glob(rel, ignore_globs):
-            continue
-        yield path
+        with scandir_it:
+            for entry in scandir_it:
+                try:
+                    is_link = entry.is_symlink()
+                except OSError:
+                    continue
+                if is_link and not follow_symlinks:
+                    continue
+                try:
+                    # Don't recurse into symlinked directories — preserves the
+                    # prior `Path.rglob` default of not following dir symlinks
+                    # even when `follow_symlinks=True` (which only governs
+                    # whether symlinked *files* are yielded).
+                    if not is_link and entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                        continue
+                    if not entry.is_file(follow_symlinks=True):
+                        continue
+                except OSError:
+                    continue
+                if ignore_globs:
+                    rel = entry.path[base_len:]
+                    if sep != "/":
+                        rel = rel.replace(sep, "/")
+                    if _matches_any_glob(rel, ignore_globs):
+                        continue
+                yield Path(entry.path)
 
 
 from dataclasses import dataclass
