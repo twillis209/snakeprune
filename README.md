@@ -1,15 +1,15 @@
 # snakeprune
 
-Find orphan files in a Snakemake project's `results/` directory — files that no rule in the current pipeline can produce.
+Find 'orphan' files in a `snakemake` project's `results/` directory and delete them.
 
 ## Motivation
 
-As a Snakemake pipeline evolves, new wildcards get added to output paths (e.g., adding `{pc_orth}` between two existing path segments). Pre-existing files on disk are stranded: they no longer match any rule's output pattern, but Snakemake doesn't know to clean them up. Over the lifetime of an active project this can accumulate to tens of thousands of obsolete files, consuming space and tripping HPC file-count limits.
+When developing a `snakemake` pipeline, I usually develop and run rules iteratively, producing many versions of output files differing in their output paths; these tend to grow progressively larger as I encode more and more wildcard values in them. E.g. `results/{sample}/{replicate}/output.txt` becomes `results/{sample}/{replicate}/{normalisation}/output.txt` becomes `results/{sample}/{replicate}/{normalisation}/{count_threshold}/output.txt` and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time, but to my knowledge `snakemake` provides no way of cleaning these file sup.
 
-`snakeprune` ingests the pipeline definitions via Snakemake's Python API, builds a regex pattern per rule output (using each rule's `wildcard_constraints`), walks the project's `results/` tree, and reports files that match no pattern.
+`snakeprune` ingests workflow via the `snakemake` Python API, builds a regex pattern per rule output, walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can additionally delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
 ## Install
-
+Navigate to the `snakeprune` repo root and run:
 ```bash
 pip install -e .
 ```
@@ -55,8 +55,6 @@ snakeprune scan path/to/pipeline path/to/results --trash path/to/trash
 - `--yes` skips the prompt; required when stdin is not a TTY (e.g. in scripts).
 - `--trash DIR` moves each orphan to `DIR/<results-dir-name>/<rel-path>` instead of unlinking, so deletions are reversible. Passing `--trash` implies deletion — you do not also need `--delete`.
 
-> **Upgrading from a pre-safety release:** `--delete` used to unlink silently. It now requires either an interactive TTY or `--yes`. Existing scripts that call `snakeprune scan ... --delete` will refuse with exit code 3 until `--yes` is added.
-
 ### Recommended first-use workflow
 
 1. Run a plain `snakeprune scan <pipeline> <results>` and eyeball the orphan list.
@@ -77,7 +75,7 @@ Because `snakeprune` uses Snakemake's Python API to load the workflow in-process
 - All Python dependencies the workflow imports at top level (e.g. `pandas`, `polars`) must be installed.
 - Any files the workflow reads at parse time (gene lists, config files, resource bundles) must be accessible from the directory you point `snakeprune` at.
 
-In practice this usually means running `snakeprune` in the same environment / on the same host where you normally run `snakemake`. For HPC pipelines this is your usual login or compute node, not your laptop. A separate process / subprocess-based approach that avoids in-process workflow loading is a possible future direction.
+In practice this usually means running `snakeprune` in the same environment / on the same host where you normally run `snakemake`.
 
 ## How it works
 
@@ -88,7 +86,3 @@ In practice this usually means running `snakeprune` in the same environment / on
 5. For each regular file, match the path against all compiled rule patterns. Files matching none are orphans.
 6. With `--rule-attribution`, report each orphan with the rule whose literal path prefix it most closely resembles.
 7. With `--delete`, unlink each orphan one at a time (regular files only; symlinks refused unless `--allow-symlinks`).
-
-## Status
-
-MVP. Design at `docs/superpowers/specs/2026-06-16-snakeprune-design.md`; implementation plan at `docs/superpowers/plans/2026-06-16-snakeprune-mvp.md`.
