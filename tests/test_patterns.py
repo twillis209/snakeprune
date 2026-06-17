@@ -168,6 +168,49 @@ def test_load_rule_specs_multiple_rules(make_pipeline):
     assert names == ["a", "b"]
 
 
+def test_load_rule_specs_module_imported_rules_visible(make_pipeline):
+    """Rules imported via `module ... use rule * from foo` must appear in
+    the parent workflow's rule list, with their output patterns intact."""
+    pipeline = make_pipeline(
+        "module foo:\n"
+        "    snakefile: 'foo.smk'\n"
+        "\n"
+        "use rule * from foo\n",
+        smk_files={
+            "foo.smk":
+                "rule a:\n"
+                "    output: 'results/{n}.txt'\n"
+                "    shell: 'touch {output}'\n"
+        },
+    )
+    specs = load_rule_specs(pipeline)
+    assert any(s.name == "a" for s in specs), [s.name for s in specs]
+    a = next(s for s in specs if s.name == "a")
+    assert a.outputs == ["results/{n}.txt"]
+
+
+def test_load_rule_specs_module_with_prefix_applied(make_pipeline):
+    """`module foo: prefix: 'subdir/'` prepends a path to the imported rule's
+    inputs and outputs. snakeprune must see the *prefixed* pattern, otherwise
+    every file under `subdir/results/` would look like an orphan."""
+    pipeline = make_pipeline(
+        "module foo:\n"
+        "    snakefile: 'foo.smk'\n"
+        "    prefix: 'subdir/'\n"
+        "\n"
+        "use rule * from foo\n",
+        smk_files={
+            "foo.smk":
+                "rule a:\n"
+                "    output: 'results/{n}.txt'\n"
+                "    shell: 'touch {output}'\n"
+        },
+    )
+    specs = load_rule_specs(pipeline)
+    a = next(s for s in specs if s.name == "a")
+    assert a.outputs == ["subdir/results/{n}.txt"], a.outputs
+
+
 def test_load_rule_specs_does_not_pollute_cwd(make_pipeline, tmp_path, monkeypatch):
     pipeline = make_pipeline(
         "rule a:\n"
