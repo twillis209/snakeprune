@@ -72,6 +72,11 @@ def scan(
         "--yes",
         help="Skip the interactive Y/N prompt before deleting. Required for non-TTY use.",
     ),
+    trash: Optional[Path] = typer.Option(
+        None,
+        "--trash",
+        help="Move orphans to this directory instead of unlinking; implies delete mode.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -165,7 +170,8 @@ def scan(
             line += f"\t(likely: {orphan.likely_rule})"
         typer.echo(line)
 
-    if delete and orphans:
+    deletion_requested = delete or trash is not None
+    if deletion_requested and orphans:
         total_bytes = 0
         for o in orphans:
             try:
@@ -195,4 +201,9 @@ def scan(
             if answer.strip().lower() not in {"y", "yes"}:
                 typer.echo("Aborted.", err=True)
                 raise typer.Exit(code=0)
-        delete_orphans(orphans, allow_symlinks=allow_symlinks)
+        delete_orphans(
+            orphans,
+            allow_symlinks=allow_symlinks,
+            trash_dir=trash,
+            results_dir_name=results_dir.name if trash is not None else None,
+        )

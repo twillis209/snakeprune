@@ -323,3 +323,35 @@ def test_cli_scan_surfaces_skipped_symlinked_dirs(make_pipeline, make_results, t
     assert result.exit_code == 0
     combined = result.stdout + (result.stderr or "")
     assert "Skipped 1 symlinked subdirectory" in combined
+
+
+def test_cli_scan_trash_moves_orphan_to_dir(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv"])
+    trash = tmp_path / "trash"
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes", "--allow-high-orphan-rate"]
+    )
+    assert result.exit_code == 0
+    assert not (results / "obsolete.csv").exists()
+    assert (trash / results.name / "obsolete.csv").exists()
+
+
+def test_cli_scan_trash_implies_delete_mode(make_pipeline, make_results, tmp_path):
+    # User passes --trash but not --delete; deletion should still happen.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv"])
+    trash = tmp_path / "trash"
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes", "--allow-high-orphan-rate"]
+    )
+    assert result.exit_code == 0
+    assert (trash / results.name / "obsolete.csv").exists()
