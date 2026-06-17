@@ -28,9 +28,45 @@ snakeprune scan path/to/pipeline path/to/results --ignore "notes/**" --ignore "*
 
 # Actually delete (refuses symlinks unless --allow-symlinks)
 snakeprune scan path/to/pipeline path/to/results --delete
+
+# Non-interactive delete (for scripts)
+snakeprune scan path/to/pipeline path/to/results --delete --yes
+
+# Reversible delete: move orphans into a trash directory instead of unlinking
+snakeprune scan path/to/pipeline path/to/results --trash path/to/trash
 ```
 
 `path/to/pipeline` is the directory containing the Snakefile (e.g. the `smk/` directory for projects following the recommended `workflow/Snakefile` layout, or whatever directory holds your `Snakefile`). `snakeprune` resolves the entry point as `<pipeline>/Snakefile` first, then falls back to `<pipeline>/workflow/Snakefile`.
+
+## Safety and limitations
+
+`snakeprune` is destructive at the user's request, so the CLI tries hard to refuse rather than do the wrong thing.
+
+### Built-in refusals
+
+- **Empty rule list.** If the workflow loads but produces zero output patterns (e.g. all rules are gated behind config that wasn't passed), `snakeprune` refuses to scan rather than report every file as an orphan. Override with `--allow-empty-rules`.
+- **Results-dir / rule-prefix mismatch.** If you point at `path/to/foo/` but no rule writes under `foo/`, every file would look like an orphan. `snakeprune` refuses and surfaces the prefixes the rules actually use. Override with `--allow-basename-mismatch`.
+- **High orphan rate.** When more than `--orphan-rate-threshold` (default 0.5) of scanned files would be orphans, `snakeprune` prints a loud warning and — under `--delete` / `--trash` — refuses unless `--allow-high-orphan-rate` is also passed. Pass `--orphan-rate-threshold 1.0` to disable the check entirely.
+
+### Deletion flow
+
+- Default behaviour without `--delete` or `--trash` is dry-run: list orphans and take no action.
+- `--delete` shows a summary (count + total bytes) and prompts `[y/N]` before unlinking.
+- `--yes` skips the prompt; required when stdin is not a TTY (e.g. in scripts).
+- `--trash DIR` moves each orphan to `DIR/<results-dir-name>/<rel-path>` instead of unlinking, so deletions are reversible. Passing `--trash` implies deletion — you do not also need `--delete`.
+
+### Recommended first-use workflow
+
+1. Run a plain `snakeprune scan <pipeline> <results>` and eyeball the orphan list.
+2. If the list looks right, re-run with `--trash some/staging/dir` to move (not unlink) the orphans.
+3. After a few days of confidence that nothing's missing, delete the trash directory.
+
+### Limitations
+
+- **Config-conditional rules.** If a rule is only `include:`-d under specific config values, running `snakeprune` with a different config will not see that rule, and its outputs will be reported as orphans. Always run `snakeprune` in the same env / with the same config used to produce the files.
+- **Symlinked subdirectories are not recursed.** Files reachable only via a symlinked subdirectory are never scanned. The CLI surfaces a one-line count of skipped symlinked subdirectories at the end of the walk so this is at least visible.
+- **Module-imported rules** (`module foo: snakefile: ...; use rule * from foo`) are supported, including the `prefix:` directive. Less-common configurations (heavy `with: output:` overrides, deeply nested modules) are not specifically tested — review the orphan list before deleting.
+- **No multi-config awareness.** Pipelines that legitimately produce outputs under multiple configs (e.g. running with `sample_set=A` and later `sample_set=B`) need separate scans per config; `snakeprune` only sees one config at a time.
 
 ## Runtime requirements
 
