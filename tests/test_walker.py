@@ -93,3 +93,36 @@ def test_find_orphans_with_attribution_guesses_closest_rule(make_pipeline, make_
     orphans = find_orphans(pipeline, results, attribute_rules=True)
     assert len(orphans) == 1
     assert orphans[0].likely_rule == "egene_model"
+
+
+def test_iter_results_files_stats_counts_skipped_symlinked_dirs(make_results, tmp_path):
+    results = make_results(["a.txt"])
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "x.txt").write_text("x")
+    (results / "link_dir").symlink_to(external)
+    stats: dict = {}
+    rels = [rel for _, rel in iter_results_files(results, stats=stats)]
+    assert "a.txt" in rels
+    # The symlinked directory itself was skipped, and its contents were not visited.
+    assert "link_dir/x.txt" not in rels
+    assert stats == {"skipped_symlinked_dirs": 1}
+
+
+def test_iter_results_files_stats_zero_when_no_dir_symlinks(make_results):
+    results = make_results(["a.txt", "sub/b.txt"])
+    stats: dict = {}
+    list(iter_results_files(results, stats=stats))
+    assert stats == {"skipped_symlinked_dirs": 0}
+
+
+def test_iter_results_files_stats_omitted_does_not_error(make_results, tmp_path):
+    # File-symlinks and dir-symlinks both present; default kwarg path must still work.
+    results = make_results(["a.txt"])
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "x.txt").write_text("x")
+    (results / "link_dir").symlink_to(external)
+    (results / "link_file").symlink_to(external / "x.txt")
+    rels = [rel for _, rel in iter_results_files(results)]
+    assert rels == ["a.txt"]

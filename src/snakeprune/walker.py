@@ -23,6 +23,7 @@ def iter_results_files(
     results_dir: Path,
     ignore_globs: Iterable[str] = (),
     follow_symlinks: bool = False,
+    stats: dict | None = None,
 ) -> Iterator[tuple[str, str]]:
     """Yield ``(full_path, rel_posix)`` string pairs for regular files under
     ``results_dir``, skipping ignored paths and (by default) symlinks.
@@ -36,8 +37,15 @@ def iter_results_files(
     Uses ``os.scandir`` for traversal so each entry's type can be read from the
     cached dirent on filesystems that support ``d_type``, avoiding the extra
     ``stat`` syscalls that ``Path.rglob`` + ``Path.is_file/is_symlink`` incur.
+
+    If ``stats`` is provided, the walker initialises
+    ``stats["skipped_symlinked_dirs"] = 0`` and increments it once per
+    directory entry that is a symlink to a directory and is being skipped
+    because ``follow_symlinks=False``.
     """
     ignore_globs = tuple(ignore_globs)
+    if stats is not None:
+        stats["skipped_symlinked_dirs"] = 0
     base_str = os.fspath(results_dir)
     base_len = len(base_str) + 1  # length of "<base>/" prefix to strip
     sep = os.sep
@@ -57,6 +65,12 @@ def iter_results_files(
                 except OSError:
                     continue
                 if is_link and not follow_symlinks:
+                    if stats is not None:
+                        try:
+                            if entry.is_dir(follow_symlinks=True):
+                                stats["skipped_symlinked_dirs"] += 1
+                        except OSError:
+                            pass
                     continue
                 try:
                     # Don't recurse into symlinked directories — preserves the
