@@ -23,17 +23,25 @@ def iter_results_files(
     results_dir: Path,
     ignore_globs: Iterable[str] = (),
     follow_symlinks: bool = False,
-) -> Iterator[Path]:
-    """Yield regular files under `results_dir`, skipping ignored paths and (by default) symlinks.
+) -> Iterator[tuple[str, str]]:
+    """Yield ``(full_path, rel_posix)`` string pairs for regular files under
+    ``results_dir``, skipping ignored paths and (by default) symlinks.
 
-    Uses `os.scandir` for traversal so each entry's type can be read from the
-    cached dirent on filesystems that support `d_type`, avoiding the extra
-    `stat` syscalls that `Path.rglob` + `Path.is_file/is_symlink` incur.
+    Strings rather than ``Path`` objects: the per-file path-string slicing here
+    is much cheaper than constructing a ``Path`` (and calling ``relative_to`` /
+    ``as_posix`` on it) in the consumer's hot loop. Callers that need a
+    ``Path`` (e.g. to record an orphan) construct one on demand from the
+    yielded full-path string.
+
+    Uses ``os.scandir`` for traversal so each entry's type can be read from the
+    cached dirent on filesystems that support ``d_type``, avoiding the extra
+    ``stat`` syscalls that ``Path.rglob`` + ``Path.is_file/is_symlink`` incur.
     """
     ignore_globs = tuple(ignore_globs)
     base_str = os.fspath(results_dir)
     base_len = len(base_str) + 1  # length of "<base>/" prefix to strip
     sep = os.sep
+    needs_sep_swap = sep != "/"
 
     stack: list[str] = [base_str]
     while stack:
@@ -62,13 +70,13 @@ def iter_results_files(
                         continue
                 except OSError:
                     continue
-                if ignore_globs:
-                    rel = entry.path[base_len:]
-                    if sep != "/":
-                        rel = rel.replace(sep, "/")
-                    if _matches_any_glob(rel, ignore_globs):
-                        continue
-                yield Path(entry.path)
+                full_path = entry.path
+                rel = full_path[base_len:]
+                if needs_sep_swap:
+                    rel = rel.replace(sep, "/")
+                if ignore_globs and _matches_any_glob(rel, ignore_globs):
+                    continue
+                yield full_path, rel
 
 
 from dataclasses import dataclass
@@ -119,10 +127,13 @@ def find_orphans(
     patterns = find_rule_patterns(pipeline_dir)
     combined = combine_rule_patterns(patterns)
     orphans: list[OrphanFile] = []
-    for path in iter_results_files(results_dir, ignore_globs=ignore_globs, follow_symlinks=follow_symlinks):
-        match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
+    target_prefix = results_dir.name + "/"
+    for full_path, rel in iter_results_files(
+        results_dir, ignore_globs=ignore_globs, follow_symlinks=follow_symlinks
+    ):
+        match_target = target_prefix + rel
         if combined is not None and combined.match(match_target):
             continue
         likely = attribute_orphan_to_rule(match_target, patterns) if attribute_rules else None
-        orphans.append(OrphanFile(path=path, likely_rule=likely))
+        orphans.append(OrphanFile(path=Path(full_path), likely_rule=likely))
     return orphans

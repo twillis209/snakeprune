@@ -58,7 +58,8 @@ def scan(
     log(f"Walking {results_dir}...")
     orphans: list[OrphanFile] = []
     file_count = 0
-    for path in iter_results_files(
+    target_prefix = results_dir.name + "/"
+    for full_path, rel in iter_results_files(
         results_dir,
         ignore_globs=tuple(ignore or ()),
         follow_symlinks=follow_symlinks,
@@ -68,11 +69,11 @@ def scan(
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
-        match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
+        match_target = target_prefix + rel
         if combined is not None and combined.match(match_target):
             continue
         likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
-        orphans.append(OrphanFile(path=path, likely_rule=likely))
+        orphans.append(OrphanFile(path=Path(full_path), likely_rule=likely))
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
 
     for orphan in orphans:
