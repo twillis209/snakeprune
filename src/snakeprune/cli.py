@@ -49,6 +49,17 @@ def scan(
         "--allow-basename-mismatch",
         help="Bypass refusal when no rule writes under the results-dir basename.",
     ),
+    orphan_rate_threshold: float = typer.Option(
+        0.5,
+        "--orphan-rate-threshold",
+        help="Fraction (0.0-1.0) above which the high-orphan-rate warning fires "
+             "(default 0.5; pass 1.0 to disable).",
+    ),
+    allow_high_orphan_rate: bool = typer.Option(
+        False,
+        "--allow-high-orphan-rate",
+        help="Bypass --delete refusal when orphan rate exceeds threshold.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -110,6 +121,20 @@ def scan(
         likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
         orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
+
+    high_rate = False
+    if file_count > 0:
+        rate = len(orphans) / file_count
+        if rate > orphan_rate_threshold:
+            high_rate = True
+            pct = round(rate * 100)
+            typer.echo(
+                f"WARNING: {pct}% of scanned files are orphans "
+                f"({len(orphans)} of {file_count}). This is unusually high and "
+                f"usually indicates a config or environment problem rather than "
+                f"real cleanup. Review the list carefully before deleting.",
+                err=True,
+            )
 
     for orphan in orphans:
         line = str(orphan.path)

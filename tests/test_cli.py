@@ -164,3 +164,47 @@ def test_cli_scan_allow_basename_mismatch_bypasses_refusal(make_pipeline, tmp_pa
     )
     assert result.exit_code == 0
     assert "x.txt" in result.stdout
+
+
+def test_cli_scan_warns_when_orphan_rate_high(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    # 1 live ('1.txt') vs 3 orphans -> 75% rate.
+    results = make_results(["1.txt", "obs1.csv", "obs2.csv", "obs3.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "WARNING" in combined
+    assert "75" in combined  # percentage in the warning
+
+
+def test_cli_scan_no_warning_below_threshold(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    # 3 live vs 1 orphan -> 25% rate, well below default 50% threshold.
+    results = make_results(["1.txt", "2.txt", "3.txt", "obs.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "WARNING" not in combined
+
+
+def test_cli_scan_threshold_flag_disables_check_at_one(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obs1.csv", "obs2.csv", "obs3.csv"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--orphan-rate-threshold", "1.0"]
+    )
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "WARNING" not in combined
