@@ -34,6 +34,7 @@ def scan(
     follow_symlinks: bool = typer.Option(False, "--follow-symlinks", help="Follow symlinks (default: skip)."),
     allow_symlinks: bool = typer.Option(False, "--allow-symlinks", help="Allow deleting symlinks when --delete is set."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress messages on stderr."),
+    limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
 
@@ -57,6 +58,8 @@ def scan(
         ignore_globs=tuple(ignore or ()),
         follow_symlinks=follow_symlinks,
     ):
+        if limit is not None and file_count >= limit:
+            break
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
