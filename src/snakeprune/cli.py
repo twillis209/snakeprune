@@ -1,6 +1,7 @@
 """snakeprune CLI."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,12 @@ from snakeprune.walker import (
 )
 
 PROGRESS_INTERVAL = 10000
+
+
+def _stdin_isatty() -> bool:
+    """Return whether stdin is a TTY.  Thin wrapper so tests can monkeypatch it."""
+    return sys.stdin.isatty()
+
 
 app = typer.Typer(add_completion=False, help="Find orphan files in a Snakemake results tree.")
 
@@ -59,6 +66,11 @@ def scan(
         False,
         "--allow-high-orphan-rate",
         help="Bypass --delete refusal when orphan rate exceeds threshold.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        help="Skip the interactive Y/N prompt before deleting. Required for non-TTY use.",
     ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
@@ -105,10 +117,12 @@ def scan(
     orphans: list[OrphanFile] = []
     file_count = 0
     target_prefix = results_dir.name + "/"
+    walk_stats: dict = {}
     for full_path, rel in iter_results_files(
         results_dir,
         ignore_globs=tuple(ignore or ()),
         follow_symlinks=follow_symlinks,
+        stats=walk_stats,
     ):
         if limit is not None and file_count >= limit:
             break
@@ -121,6 +135,15 @@ def scan(
         likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
         orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
+
+    skipped_dirs = walk_stats.get("skipped_symlinked_dirs", 0)
+    if skipped_dirs > 0:
+        suffix = "y" if skipped_dirs == 1 else "ies"
+        typer.echo(
+            f"Skipped {skipped_dirs} symlinked subdirector{suffix}; files "
+            f"reachable only via those paths were not scanned.",
+            err=True,
+        )
 
     high_rate = False
     if file_count > 0:
@@ -143,4 +166,33 @@ def scan(
         typer.echo(line)
 
     if delete and orphans:
+        total_bytes = 0
+        for o in orphans:
+            try:
+                total_bytes += o.path.stat().st_size
+            except OSError:
+                pass
+        typer.echo(
+            f"About to delete {len(orphans)} file(s), {total_bytes} byte(s).",
+            err=True,
+        )
+        if high_rate and not allow_high_orphan_rate:
+            typer.echo(
+                "Refusing to delete: orphan rate exceeded threshold. Pass "
+                "--allow-high-orphan-rate to override.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+        if not yes:
+            if not _stdin_isatty():
+                typer.echo(
+                    "Refusing to delete: stdin is not a TTY. Pass --yes to "
+                    "confirm in scripts.",
+                    err=True,
+                )
+                raise typer.Exit(code=3)
+            answer = typer.prompt("Proceed? [y/N]", default="n", show_default=False)
+            if answer.strip().lower() not in {"y", "yes"}:
+                typer.echo("Aborted.", err=True)
+                raise typer.Exit(code=0)
         delete_orphans(orphans, allow_symlinks=allow_symlinks)

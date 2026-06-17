@@ -37,7 +37,10 @@ def test_cli_scan_delete_flag_unlinks(make_pipeline, make_results):
         "    shell: 'touch {output}'\n"
     )
     results = make_results(["obsolete.csv"])
-    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-high-orphan-rate"],
+    )
     assert result.exit_code == 0
     assert not (results / "obsolete.csv").exists()
 
@@ -208,3 +211,115 @@ def test_cli_scan_threshold_flag_disables_check_at_one(make_pipeline, make_resul
     assert result.exit_code == 0
     combined = result.stdout + (result.stderr or "")
     assert "WARNING" not in combined
+
+
+def test_cli_scan_delete_non_tty_without_yes_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "--yes" in combined
+    # Nothing deleted
+    assert (results / "obsolete.csv").exists()
+
+
+def test_cli_scan_delete_high_rate_refused_without_allow_flag(
+    make_pipeline, make_results
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    # 75% orphan rate.
+    results = make_results(["1.txt", "obs1.csv", "obs2.csv", "obs3.csv"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--delete", "--yes"]
+    )
+    assert result.exit_code == 3
+    # All orphans preserved.
+    assert (results / "obs1.csv").exists()
+    combined = result.stdout + (result.stderr or "")
+    assert "--allow-high-orphan-rate" in combined
+
+
+def test_cli_scan_delete_high_rate_proceeds_with_allow_flag(
+    make_pipeline, make_results
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obs1.csv", "obs2.csv", "obs3.csv"])
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--delete", "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 0
+    assert not (results / "obs1.csv").exists()
+
+
+def test_cli_scan_delete_prompt_aborts_on_n(make_pipeline, make_results, monkeypatch):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv"])
+    # Simulate a TTY so the prompt branch is taken.
+    monkeypatch.setattr("snakeprune.cli._stdin_isatty", lambda: True)
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--allow-high-orphan-rate"],
+        input="n\n",
+    )
+    assert result.exit_code == 0
+    assert (results / "obsolete.csv").exists()
+    combined = result.stdout + (result.stderr or "")
+    assert "Aborted" in combined
+
+
+def test_cli_scan_delete_prompt_proceeds_on_y(make_pipeline, make_results, monkeypatch):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv"])
+    monkeypatch.setattr("snakeprune.cli._stdin_isatty", lambda: True)
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--allow-high-orphan-rate"],
+        input="y\n",
+    )
+    assert result.exit_code == 0
+    assert not (results / "obsolete.csv").exists()
+
+
+def test_cli_scan_surfaces_skipped_symlinked_dirs(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "x.txt").write_text("x")
+    (results / "link_dir").symlink_to(external)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "Skipped 1 symlinked subdirectory" in combined
