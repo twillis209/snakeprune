@@ -55,6 +55,8 @@ snakeprune scan path/to/pipeline path/to/results --trash path/to/trash
 - `--yes` skips the prompt; required when stdin is not a TTY (e.g. in scripts).
 - `--trash DIR` moves each orphan to `DIR/<results-dir-name>/<rel-path>` instead of unlinking, so deletions are reversible. Passing `--trash` implies deletion — you do not also need `--delete`.
 
+> **Upgrading from a pre-safety release:** `--delete` used to unlink silently. It now requires either an interactive TTY or `--yes`. Existing scripts that call `snakeprune scan ... --delete` will refuse with exit code 3 until `--yes` is added.
+
 ### Recommended first-use workflow
 
 1. Run a plain `snakeprune scan <pipeline> <results>` and eyeball the orphan list.

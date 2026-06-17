@@ -198,6 +198,22 @@ def test_cli_scan_no_warning_below_threshold(make_pipeline, make_results):
     assert "WARNING" not in combined
 
 
+def test_cli_scan_empty_results_dir_no_warning_no_crash(make_pipeline, make_results):
+    # An empty results dir means file_count == 0; the high-orphan-rate block
+    # must skip cleanly (no ZeroDivisionError, no warning).
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results([])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "WARNING" not in combined
+    assert "ZeroDivisionError" not in combined
+
+
 def test_cli_scan_threshold_flag_disables_check_at_one(make_pipeline, make_results):
     pipeline = make_pipeline(
         "rule a:\n"
