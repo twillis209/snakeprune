@@ -38,6 +38,11 @@ def scan(
     follow_symlinks: bool = typer.Option(False, "--follow-symlinks", help="Follow symlinks (default: skip)."),
     allow_symlinks: bool = typer.Option(False, "--allow-symlinks", help="Allow deleting symlinks when --delete is set."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress messages on stderr."),
+    allow_empty_rules: bool = typer.Option(
+        False,
+        "--allow-empty-rules",
+        help="Bypass refusal when the workflow has 0 output patterns.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -53,6 +58,15 @@ def scan(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
     log(f"Loaded {len(patterns)} rule output pattern(s).")
+    if not patterns and not allow_empty_rules:
+        typer.echo(
+            "Workflow loaded but produced 0 output patterns. Refusing to "
+            "scan: every file would be reported as an orphan. Check that "
+            "the right config / env is loaded, or pass --allow-empty-rules "
+            "to override.",
+            err=True,
+        )
+        raise typer.Exit(code=3)
     combined = combine_rule_patterns(patterns)
 
     log(f"Walking {results_dir}...")

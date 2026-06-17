@@ -97,3 +97,33 @@ def test_cli_scan_short_q_flag_also_suppresses(make_pipeline, make_results):
     combined = result.stdout + (result.stderr or "")
     assert "Loading" not in combined
     assert "Walking" not in combined
+
+
+def test_cli_scan_refuses_when_workflow_has_no_rules(tmp_path):
+    # A workflow that defines no rules (just a configfile statement is enough
+    # to make Snakemake load successfully but produce 0 rules).
+    pipeline = tmp_path / "pipeline"
+    pipeline.mkdir()
+    (pipeline / "Snakefile").write_text("# no rules here\n")
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "anything.txt").write_text("x")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "0 output patterns" in combined
+    assert "--allow-empty-rules" in combined
+
+
+def test_cli_scan_allow_empty_rules_bypasses_refusal(tmp_path):
+    pipeline = tmp_path / "pipeline"
+    pipeline.mkdir()
+    (pipeline / "Snakefile").write_text("# no rules here\n")
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "anything.txt").write_text("x")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-empty-rules"]
+    )
+    assert result.exit_code == 0
+    assert "anything.txt" in result.stdout
