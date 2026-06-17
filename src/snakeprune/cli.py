@@ -10,6 +10,7 @@ from snakeprune.delete import delete_orphans
 from snakeprune.patterns import (
     SnakefileNotFound,
     combine_rule_patterns,
+    extract_literal_prefix,
     find_rule_patterns,
 )
 from snakeprune.walker import (
@@ -43,6 +44,11 @@ def scan(
         "--allow-empty-rules",
         help="Bypass refusal when the workflow has 0 output patterns.",
     ),
+    allow_basename_mismatch: bool = typer.Option(
+        False,
+        "--allow-basename-mismatch",
+        help="Bypass refusal when no rule writes under the results-dir basename.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -67,6 +73,21 @@ def scan(
             err=True,
         )
         raise typer.Exit(code=3)
+    if patterns and not allow_basename_mismatch:
+        results_prefix = results_dir.name + "/"
+        rule_prefixes = [extract_literal_prefix(p) for _, p in patterns]
+        if not any(rp.startswith(results_prefix) for rp in rule_prefixes):
+            # Surface up to 3 most common first-segments to help the user.
+            from collections import Counter
+            first_segs = Counter(rp.split("/", 1)[0] + "/" for rp in rule_prefixes if rp)
+            top = ", ".join(f"`{seg}`" for seg, _ in first_segs.most_common(3))
+            typer.echo(
+                f"No rule writes under `{results_prefix}`. Rules write under: "
+                f"{top}. Did you point at the wrong directory? Pass "
+                f"--allow-basename-mismatch to override.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
     combined = combine_rule_patterns(patterns)
 
     log(f"Walking {results_dir}...")

@@ -194,6 +194,22 @@ def find_rule_patterns(pipeline_dir: Path) -> list[tuple[str, re.Pattern]]:
     return out
 
 
+def extract_literal_prefix(compiled: re.Pattern) -> str:
+    """Return the un-escaped literal prefix of an anchored rule regex.
+
+    Reads ``compiled.pattern`` up to the first ``(`` (the first capture group)
+    and reverses ``re.escape``-style backslash escaping so the result is a
+    real path prefix. Returns the entire literal body (minus the trailing
+    ``$``) if the pattern has no capture group.
+    """
+    body = compiled.pattern.lstrip("^")
+    if body.endswith("$"):
+        body = body[:-1]
+    cut = body.find("(")
+    literal = body if cut == -1 else body[:cut]
+    return re.sub(r"\\(.)", r"\1", literal)
+
+
 _NAMED_GROUP_OPEN_RE = re.compile(r"\(\?P<([A-Za-z_][A-Za-z_0-9]*)>")
 _NAMED_BACKREF_RE = re.compile(r"\(\?P=([A-Za-z_][A-Za-z_0-9]*)\)")
 

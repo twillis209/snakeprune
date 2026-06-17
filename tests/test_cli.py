@@ -127,3 +127,40 @@ def test_cli_scan_allow_empty_rules_bypasses_refusal(tmp_path):
     )
     assert result.exit_code == 0
     assert "anything.txt" in result.stdout
+
+
+def test_cli_scan_refuses_when_no_rule_writes_under_results_dir_basename(
+    make_pipeline, tmp_path
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    # User points at a directory whose basename ('outputs') doesn't appear in
+    # any rule's literal prefix (rules write under 'results/').
+    wrong = tmp_path / "outputs"
+    wrong.mkdir()
+    (wrong / "x.txt").write_text("x")
+    result = runner.invoke(app, ["scan", str(pipeline), str(wrong)])
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "outputs/" in combined
+    assert "results/" in combined  # surfaced as the actual prefix
+    assert "--allow-basename-mismatch" in combined
+
+
+def test_cli_scan_allow_basename_mismatch_bypasses_refusal(make_pipeline, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    wrong = tmp_path / "outputs"
+    wrong.mkdir()
+    (wrong / "x.txt").write_text("x")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(wrong), "--allow-basename-mismatch"]
+    )
+    assert result.exit_code == 0
+    assert "x.txt" in result.stdout

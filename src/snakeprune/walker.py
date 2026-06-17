@@ -96,7 +96,11 @@ def iter_results_files(
 from dataclasses import dataclass
 import re
 
-from snakeprune.patterns import combine_rule_patterns, find_rule_patterns
+from snakeprune.patterns import (
+    combine_rule_patterns,
+    extract_literal_prefix,
+    find_rule_patterns,
+)
 
 
 @dataclass(frozen=True)
@@ -113,20 +117,9 @@ def attribute_orphan_to_rule(target: str, patterns: list[tuple[str, re.Pattern]]
     best_rule: str | None = None
     best_prefix_len = 0
     for name, regex in patterns:
-        # Reconstruct the literal prefix by reading regex.pattern up to the first '('
-        # (the first wildcard capture group). Anchored '^' is the first character.
-        literal_prefix = ""
-        body = regex.pattern.lstrip("^")
-        for ch in body:
-            if ch == "(":
-                break
-            literal_prefix += ch
-        # Un-escape: in `re.escape`, '/' is left as-is, so the prefix is a real path prefix
-        # except for '\\' before special characters. Strip backslashes that precede
-        # ASCII non-alphanumeric chars to recover the source path.
-        unescaped = re.sub(r"\\(.)", r"\1", literal_prefix)
-        if target.startswith(unescaped) and len(unescaped) > best_prefix_len:
-            best_prefix_len = len(unescaped)
+        prefix = extract_literal_prefix(regex)
+        if target.startswith(prefix) and len(prefix) > best_prefix_len:
+            best_prefix_len = len(prefix)
             best_rule = name
     return best_rule
 

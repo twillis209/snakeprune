@@ -310,3 +310,19 @@ def test_find_rule_patterns_multiext_expands(make_pipeline):
         if m:
             matched_extensions.add("ok")
     assert "ok" in matched_extensions
+
+
+from snakeprune.patterns import extract_literal_prefix
+
+
+def test_extract_literal_prefix_returns_path_before_first_wildcard():
+    regex_str = wildcard_pattern_to_regex("results/qc/{sample}.txt", constraints={})
+    pat = _re_module.compile(regex_str)
+    assert extract_literal_prefix(pat) == "results/qc/"
+
+
+def test_extract_literal_prefix_handles_pattern_without_wildcards():
+    regex_str = wildcard_pattern_to_regex("results/static/file.txt", constraints={})
+    pat = _re_module.compile(regex_str)
+    # No capture group at all -- the whole literal up to '$' (minus escapes).
+    assert extract_literal_prefix(pat) == "results/static/file.txt"
