@@ -7,7 +7,11 @@ from typing import Optional
 import typer
 
 from snakeprune.delete import delete_orphans
-from snakeprune.patterns import SnakefileNotFound, find_rule_patterns
+from snakeprune.patterns import (
+    SnakefileNotFound,
+    combine_rule_patterns,
+    find_rule_patterns,
+)
 from snakeprune.walker import (
     OrphanFile,
     attribute_orphan_to_rule,
@@ -49,6 +53,7 @@ def scan(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
     log(f"Loaded {len(patterns)} rule output pattern(s).")
+    combined = combine_rule_patterns(patterns)
 
     log(f"Walking {results_dir}...")
     orphans: list[OrphanFile] = []
@@ -64,7 +69,7 @@ def scan(
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
         match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
-        if any(p.match(match_target) for _, p in patterns):
+        if combined is not None and combined.match(match_target):
             continue
         likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
         orphans.append(OrphanFile(path=path, likely_rule=likely))

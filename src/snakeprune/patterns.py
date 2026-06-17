@@ -192,3 +192,53 @@ def find_rule_patterns(pipeline_dir: Path) -> list[tuple[str, re.Pattern]]:
             regex_str = wildcard_pattern_to_regex(output_str, spec.constraints)
             out.append((spec.name, re.compile(regex_str)))
     return out
+
+
+_NAMED_GROUP_OPEN_RE = re.compile(r"\(\?P<([A-Za-z_][A-Za-z_0-9]*)>")
+_NAMED_BACKREF_RE = re.compile(r"\(\?P=([A-Za-z_][A-Za-z_0-9]*)\)")
+
+
+def combine_rule_patterns(
+    patterns: list[tuple[str, re.Pattern]],
+) -> re.Pattern | None:
+    """Combine per-rule output regexes into a single anchored alternation.
+
+    Returns ``None`` if ``patterns`` is empty.
+
+    Different rules typically reuse wildcard names (``{sample}`` everywhere),
+    so a naive ``|``-join would fail with duplicate group names. To avoid that
+    and to keep total capturing groups under Python's per-regex limit, each
+    pattern is rewritten so:
+
+    * named groups whose name is NOT referenced by ``(?P=name)`` in the same
+      pattern are converted to non-capturing ``(?:...)``;
+    * named groups whose name IS referenced (Snakemake's implicit equality
+      between repeated wildcards) are renamed with a per-pattern prefix and
+      their backreferences updated to match.
+
+    The match semantics are unchanged from running each input regex separately.
+    """
+    if not patterns:
+        return None
+    parts: list[str] = []
+    for i, (_, compiled) in enumerate(patterns):
+        body = compiled.pattern
+        if body.startswith("^"):
+            body = body[1:]
+        if body.endswith("$"):
+            body = body[:-1]
+        prefix = f"r{i}_"
+        backref_names = set(_NAMED_BACKREF_RE.findall(body))
+
+        def _replace_named(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name in backref_names:
+                return f"(?P<{prefix}{name}>"
+            return "(?:"
+
+        body = _NAMED_GROUP_OPEN_RE.sub(_replace_named, body)
+        body = _NAMED_BACKREF_RE.sub(
+            lambda m: f"(?P={prefix}{m.group(1)})", body
+        )
+        parts.append(f"(?:{body})")
+    return re.compile("^(?:" + "|".join(parts) + ")$")

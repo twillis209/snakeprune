@@ -74,7 +74,7 @@ def iter_results_files(
 from dataclasses import dataclass
 import re
 
-from snakeprune.patterns import find_rule_patterns
+from snakeprune.patterns import combine_rule_patterns, find_rule_patterns
 
 
 @dataclass(frozen=True)
@@ -117,10 +117,11 @@ def find_orphans(
 ) -> list[OrphanFile]:
     """Return regular files under `results_dir` that match no rule output pattern."""
     patterns = find_rule_patterns(pipeline_dir)
+    combined = combine_rule_patterns(patterns)
     orphans: list[OrphanFile] = []
     for path in iter_results_files(results_dir, ignore_globs=ignore_globs, follow_symlinks=follow_symlinks):
         match_target = results_dir.name + "/" + path.relative_to(results_dir).as_posix()
-        if any(p.match(match_target) for _, p in patterns):
+        if combined is not None and combined.match(match_target):
             continue
         likely = attribute_orphan_to_rule(match_target, patterns) if attribute_rules else None
         orphans.append(OrphanFile(path=path, likely_rule=likely))

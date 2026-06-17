@@ -204,6 +204,54 @@ def test_find_rule_patterns_compiles_with_constraints(make_pipeline):
     assert not regex.match("results/abc.txt")
 
 
+from snakeprune.patterns import combine_rule_patterns
+
+
+def _compile(p):
+    return _re_module.compile(p)
+
+
+def test_combine_rule_patterns_empty_returns_none():
+    assert combine_rule_patterns([]) is None
+
+
+def test_combine_rule_patterns_matches_any_input_pattern():
+    patterns = [
+        ("a", _compile(r"^results/a/(?P<n>[^/]+)\.txt$")),
+        ("b", _compile(r"^results/b/(?P<n>[^/]+)\.csv$")),
+    ]
+    combined = combine_rule_patterns(patterns)
+    assert combined is not None
+    assert combined.match("results/a/1.txt")
+    assert combined.match("results/b/2.csv")
+    assert not combined.match("results/c/3.txt")
+
+
+def test_combine_rule_patterns_handles_shared_wildcard_names():
+    # Both rules use {sample}; naive | -join would error on duplicate group name.
+    patterns = [
+        ("align", _compile(r"^results/align/(?P<sample>[^/]+)\.bam$")),
+        ("call", _compile(r"^results/call/(?P<sample>[^/]+)\.vcf$")),
+    ]
+    combined = combine_rule_patterns(patterns)
+    assert combined is not None
+    assert combined.match("results/align/s1.bam")
+    assert combined.match("results/call/s1.vcf")
+
+
+def test_combine_rule_patterns_preserves_repeated_wildcard_equality():
+    # `results/{sample}/{sample}.bam` requires the two {sample} slots to match;
+    # the rewrite must preserve that backreference.
+    repeated = wildcard_pattern_to_regex(
+        "results/{sample}/{sample}.bam", constraints={}
+    )
+    patterns = [("dedup", _compile(repeated))]
+    combined = combine_rule_patterns(patterns)
+    assert combined is not None
+    assert combined.match("results/abc/abc.bam")
+    assert not combined.match("results/abc/xyz.bam")
+
+
 def test_find_rule_patterns_multiext_expands(make_pipeline):
     pipeline = make_pipeline(
         "rule a:\n"
