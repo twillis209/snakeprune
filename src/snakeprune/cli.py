@@ -73,7 +73,7 @@ def scan(
         if combined is not None and combined.match(match_target):
             continue
         likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
-        orphans.append(OrphanFile(path=Path(full_path), likely_rule=likely))
+        orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
 
     for orphan in orphans:

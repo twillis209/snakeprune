@@ -126,3 +126,15 @@ def test_iter_results_files_stats_omitted_does_not_error(make_results, tmp_path)
     (results / "link_file").symlink_to(external / "x.txt")
     rels = [rel for _, rel in iter_results_files(results)]
     assert rels == ["a.txt"]
+
+
+def test_find_orphans_sets_rel_on_orphan_file(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete/3.txt"])
+    orphans = find_orphans(pipeline, results)
+    assert len(orphans) == 1
+    assert orphans[0].rel == "obsolete/3.txt"

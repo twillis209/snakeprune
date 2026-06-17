@@ -102,6 +102,7 @@ from snakeprune.patterns import combine_rule_patterns, find_rule_patterns
 @dataclass(frozen=True)
 class OrphanFile:
     path: Path
+    rel: str
     likely_rule: str | None = None
 
 
@@ -149,5 +150,5 @@ def find_orphans(
         if combined is not None and combined.match(match_target):
             continue
         likely = attribute_orphan_to_rule(match_target, patterns) if attribute_rules else None
-        orphans.append(OrphanFile(path=Path(full_path), likely_rule=likely))
+        orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
     return orphans
