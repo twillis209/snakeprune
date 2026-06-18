@@ -11,7 +11,7 @@ When developing a `snakemake` pipeline, I usually write and run rules iterativel
 
 ...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these file s up.
 
-`snakeprune` ingests workflow via the `snakemake` Python API, builds a regex pattern per rule output, walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
+`snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per rule output, walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
 ## Install
 
