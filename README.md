@@ -107,4 +107,4 @@ If `python` is not on `$PATH`, `snakeprune` exits with code 4 and a message aski
 4. Walk the `results/` tree, skipping symlinks by default and any path matching an `--ignore` glob.
 5. For each regular file, match the path against all compiled rule patterns. Files matching none are orphans.
 6. With `--rule-attribution`, report each orphan with the rule whose literal path prefix it most closely resembles.
-7. With `--delete`, unlink each orphan one at a time (regular files only; symlinks refused unless `--allow-symlinks`).
+7. With `--delete` (or `--trash DIR`), prompt for confirmation, then either unlink each orphan one at a time or move it into `DIR/<results-dir-name>/<rel-path>` (regular files only; symlinks refused unless `--allow-symlinks`).
