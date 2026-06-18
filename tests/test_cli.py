@@ -373,6 +373,23 @@ def test_cli_scan_trash_implies_delete_mode(make_pipeline, make_results, tmp_pat
     assert (trash / results.name / "obsolete.csv").exists()
 
 
+def test_cli_scan_extractor_failure_exits_4(make_pipeline, monkeypatch):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    # Force the "python not on PATH" branch via the patterns module.
+    monkeypatch.setattr("snakeprune.patterns.shutil.which", lambda _name: None)
+    results = pipeline.parent / "results"
+    results.mkdir()
+    (results / "a.txt").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4
+    combined = result.stdout + (result.stderr or "")
+    assert "PATH" in combined
+
+
 def test_cli_scan_forwards_configfile_to_extractor(make_pipeline, tmp_path):
     # Rule is gated by config["do_qc"] which defaults to False. Without
     # --configfile, the rule is absent and its expected output file looks

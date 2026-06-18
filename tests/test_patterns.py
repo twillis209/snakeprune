@@ -386,3 +386,60 @@ def test_extract_script_missing_snakefile_exits_nonzero(tmp_path):
     )
     assert result.returncode != 0
     assert "Snakefile" in result.stderr
+
+
+from snakeprune.patterns import ExtractorError, run_extractor
+
+
+def test_run_extractor_python_not_on_path_message(monkeypatch, make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    monkeypatch.setattr("snakeprune.patterns.shutil.which", lambda _name: None)
+    with pytest.raises(ExtractorError) as exc:
+        run_extractor(pipeline)
+    msg = str(exc.value)
+    assert "python" in msg.lower()
+    assert "PATH" in msg
+    assert "snakemake" in msg.lower()
+
+
+def test_run_extractor_snakemake_missing_message(make_pipeline, tmp_path):
+    # Stub script that prints the import-error signature and exits nonzero,
+    # simulating a python interpreter without snakemake installed.
+    stub = tmp_path / "stub_no_snakemake.py"
+    stub.write_text(
+        "import sys\n"
+        "print(\"ModuleNotFoundError: No module named 'snakemake'\", file=sys.stderr)\n"
+        "sys.exit(1)\n"
+    )
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    with pytest.raises(ExtractorError) as exc:
+        run_extractor(pipeline, _script_path_for_testing=stub)
+    msg = str(exc.value)
+    assert "snakemake is not importable" in msg
+
+
+def test_run_extractor_bad_json_message(make_pipeline, tmp_path):
+    stub = tmp_path / "stub_bad_json.py"
+    stub.write_text(
+        "import sys\n"
+        "sys.stdout.write('this is not json\\n')\n"
+        "sys.stderr.write('garbage produced for testing\\n')\n"
+    )
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    with pytest.raises(ExtractorError) as exc:
+        run_extractor(pipeline, _script_path_for_testing=stub)
+    msg = str(exc.value)
+    assert "unparseable" in msg
+    assert "garbage produced for testing" in msg

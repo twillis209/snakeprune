@@ -151,8 +151,15 @@ def run_extractor(
     )
 
     if result.returncode != 0:
+        if "No module named 'snakemake'" in result.stderr:
+            raise ExtractorError(
+                f"The extractor failed: snakemake is not importable in "
+                f"`{python_exe}`. Activate the env where you'd normally run "
+                f"`snakemake`."
+            )
         raise ExtractorError(
-            f"Extractor failed (exit {result.returncode}):\n{result.stderr.strip()}"
+            f"Extractor failed (exit {result.returncode}):\n"
+            f"{result.stderr.strip()}"
         )
 
     try:
