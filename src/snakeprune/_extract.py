@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 
-_WILDCARD_NAME_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
 _INLINE_CONSTRAINT_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*),[^{}]*\}")
 
 
@@ -53,7 +52,7 @@ def _resolve_snakefile(pipeline_dir: Path) -> Path:
     )
 
 
-def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]):
+def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> dict:
     from snakemake.api import SnakemakeApi
     from snakemake.settings.enums import Quietness
     from snakemake.settings.types import (
@@ -73,43 +72,43 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]):
             snakefile=snakefile,
             workdir=workdir,
         )
-        return api, workflow_api._workflow
+        workflow = workflow_api._workflow
+        global_constraints = dict(
+            getattr(workflow, "wildcard_constraints", {}) or {}
+        )
+        rules_out: list[dict] = []
+        for rule in workflow.rules:
+            raw_outputs: list[str] = []
+            inline_constraints: dict[str, str] = {}
+            for o in rule.output:
+                stripped, inline = _strip_inline_constraints(str(o))
+                raw_outputs.append(stripped)
+                inline_constraints.update(inline)
+            rule_constraints = dict(
+                getattr(rule, "wildcard_constraints", {}) or {}
+            )
+            effective = {
+                **global_constraints,
+                **inline_constraints,
+                **rule_constraints,
+            }
+            rules_out.append(
+                {
+                    "name": rule.name,
+                    "outputs": raw_outputs,
+                    "constraints": effective,
+                }
+            )
+        return {"rules": rules_out}
 
 
 def extract(pipeline_dir: Path, configfiles: list[Path]) -> dict:
     snakefile = _resolve_snakefile(pipeline_dir)
-    api, workflow = _load_workflow(
+    return _load_workflow(
         snakefile=snakefile,
         workdir=pipeline_dir.resolve(),
         configfiles=configfiles,
     )
-    global_constraints = dict(
-        getattr(workflow, "wildcard_constraints", {}) or {}
-    )
-    rules_out: list[dict] = []
-    for rule in workflow.rules:
-        raw_outputs: list[str] = []
-        inline_constraints: dict[str, str] = {}
-        for o in rule.output:
-            stripped, inline = _strip_inline_constraints(str(o))
-            raw_outputs.append(stripped)
-            inline_constraints.update(inline)
-        rule_constraints = dict(
-            getattr(rule, "wildcard_constraints", {}) or {}
-        )
-        effective = {
-            **global_constraints,
-            **inline_constraints,
-            **rule_constraints,
-        }
-        rules_out.append(
-            {
-                "name": rule.name,
-                "outputs": raw_outputs,
-                "constraints": effective,
-            }
-        )
-    return {"rules": rules_out}
 
 
 def main(argv: list[str] | None = None) -> int:
