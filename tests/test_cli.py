@@ -371,3 +371,42 @@ def test_cli_scan_trash_implies_delete_mode(make_pipeline, make_results, tmp_pat
     )
     assert result.exit_code == 0
     assert (trash / results.name / "obsolete.csv").exists()
+
+
+def test_cli_scan_forwards_configfile_to_extractor(make_pipeline, tmp_path):
+    # Rule is gated by config["do_qc"] which defaults to False. Without
+    # --configfile, the rule is absent and its expected output file looks
+    # like an orphan. With --configfile do_qc.yaml (sets do_qc: true),
+    # the rule is present and the output is recognised as live.
+    pipeline = make_pipeline(
+        "if config.get('do_qc', False):\n"
+        "    rule qc:\n"
+        "        output: 'results/qc/{sample}.tsv'\n"
+        "        shell: 'touch {output}'\n"
+        "\n"
+        "rule align:\n"
+        "    output: 'results/align/{sample}.bam'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    configfile = pipeline / "do_qc.yaml"
+    configfile.write_text("do_qc: true\n")
+    results = pipeline.parent / "results"
+    results.mkdir()
+    (results / "qc").mkdir()
+    (results / "qc" / "s1.tsv").touch()
+    (results / "align").mkdir()
+    (results / "align" / "s1.bam").touch()
+
+    # Without configfile: qc rule is hidden, qc output flagged as orphan.
+    result_no_cfg = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-high-orphan-rate"]
+    )
+    assert result_no_cfg.exit_code == 0
+    assert "qc/s1.tsv" in result_no_cfg.stdout
+
+    # With configfile: qc rule visible, output recognised as live.
+    result_with_cfg = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--configfile", str(configfile)]
+    )
+    assert result_with_cfg.exit_code == 0
+    assert "qc/s1.tsv" not in result_with_cfg.stdout

@@ -78,6 +78,11 @@ def scan(
         "--trash",
         help="Move orphans to this directory instead of unlinking; implies delete mode.",
     ),
+    configfile: Optional[list[Path]] = typer.Option(
+        None,
+        "--configfile",
+        help="Snakemake configfile to pass to the extractor; repeatable.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -88,7 +93,9 @@ def scan(
 
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:
-        patterns = find_rule_patterns(pipeline_dir)
+        patterns = find_rule_patterns(
+            pipeline_dir, configfiles=tuple(configfile or ())
+        )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
