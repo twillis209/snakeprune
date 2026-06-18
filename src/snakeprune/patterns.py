@@ -182,6 +182,9 @@ def find_rule_patterns(
     Rules with multiple outputs (e.g., multiext) contribute multiple entries, one
     per output file pattern.
     """
+    # Pre-check: surface SnakefileNotFound before spawning the extractor
+    # subprocess, so a missing Snakefile exits 2 (not 4 via ExtractorError).
+    resolve_snakefile(pipeline_dir)
     out: list[tuple[str, re.Pattern]] = []
     for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
         for output_str in spec.outputs:

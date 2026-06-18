@@ -51,7 +51,7 @@ def test_cli_scan_no_snakefile_fails_cleanly(tmp_path):
     results = tmp_path / "results"
     results.mkdir()
     result = runner.invoke(app, ["scan", str(empty), str(results)])
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "Snakefile" in result.stdout or "Snakefile" in (result.stderr or "")
 
 
