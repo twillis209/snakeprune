@@ -326,3 +326,63 @@ def test_extract_literal_prefix_handles_pattern_without_wildcards():
     pat = _re_module.compile(regex_str)
     # No capture group at all -- the whole literal up to '$' (minus escapes).
     assert extract_literal_prefix(pat) == "results/static/file.txt"
+
+
+import json as _json
+import subprocess as _subprocess
+import sys as _sys
+from pathlib import Path as _Path
+
+
+def _extract_script() -> _Path:
+    """Resolve the absolute path of src/snakeprune/_extract.py from the test file."""
+    return _Path(__file__).resolve().parent.parent / "src" / "snakeprune" / "_extract.py"
+
+
+def test_extract_script_emits_rules_json(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = _subprocess.run(
+        [_sys.executable, str(_extract_script()), str(pipeline)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = _json.loads(result.stdout)
+    assert payload["rules"][0]["name"] == "a"
+    assert payload["rules"][0]["outputs"] == ["results/{n}.txt"]
+
+
+def test_extract_script_strips_inline_constraints(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x,[0-9]+}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = _subprocess.run(
+        [_sys.executable, str(_extract_script()), str(pipeline)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    rule = _json.loads(result.stdout)["rules"][0]
+    assert rule["outputs"] == ["results/{x}.txt"]
+    assert rule["constraints"].get("x") == "[0-9]+"
+
+
+def test_extract_script_missing_snakefile_exits_nonzero(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = _subprocess.run(
+        [_sys.executable, str(_extract_script()), str(empty)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Snakefile" in result.stderr
