@@ -9,6 +9,7 @@ import typer
 
 from snakeprune.delete import delete_orphans
 from snakeprune.patterns import (
+    ExtractorError,
     SnakefileNotFound,
     combine_rule_patterns,
     extract_literal_prefix,
@@ -91,6 +92,9 @@ def scan(
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
+    except ExtractorError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=4)
     log(f"Loaded {len(patterns)} rule output pattern(s).")
     if not patterns and not allow_empty_rules:
         typer.echo(

@@ -1,7 +1,12 @@
 """Build regexes from Snakemake rule output patterns."""
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Sequence
 
 _WILDCARD_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
 
@@ -33,9 +38,6 @@ def wildcard_pattern_to_regex(pattern: str, constraints: dict[str, str]) -> str:
         cursor = match.end()
     parts.append(re.escape(pattern[cursor:]))
     return "^" + "".join(parts) + "$"
-
-
-from pathlib import Path
 
 
 class SnakefileNotFound(FileNotFoundError):
@@ -80,114 +82,108 @@ class RuleSpec:
     constraints: dict[str, str]
 
 
-# Matches Snakemake's inline wildcard-with-constraint syntax inside a pattern:
-# ``{name,regex}`` -> stripped to ``{name}``. The regex body itself may contain
-# ``{`` / ``}`` only when balanced (Snakemake's own parser handles that); the
-# constraints we care about for our RuleSpec are surfaced via the workflow /
-# rule wildcard_constraints attributes, so for stripping purposes we only need
-# to remove up to the next unescaped ``}``.
-_INLINE_CONSTRAINT_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*),[^{}]*\}")
+class ExtractorError(RuntimeError):
+    """Raised when the rule-extractor subprocess fails or produces invalid output.
 
-
-def _strip_inline_constraints(pattern: str) -> tuple[str, dict[str, str]]:
-    """Strip ``{name,regex}`` -> ``{name}`` from a Snakemake output pattern.
-
-    Returns a tuple of ``(stripped_pattern, inline_constraints)`` where
-    ``inline_constraints`` maps each inline-annotated wildcard name to its
-    regex body. Snakemake stores the raw pattern with the inline regex in
-    ``rule.output`` but does NOT populate it into ``rule.wildcard_constraints``,
-    so callers need this dict to recover the constraint information that would
-    otherwise be discarded.
+    The user-facing message is ``str(exc)``; the CLI translates this into
+    exit code 4 with the message on stderr.
     """
-    constraints: dict[str, str] = {}
-
-    def _record(match: re.Match[str]) -> str:
-        name = match.group(1)
-        # Match group 0 is "{name,body}"; drop "{name," and trailing "}".
-        body = match.group(0)[len(name) + 2 : -1]
-        constraints[name] = body
-        return "{" + name + "}"
-
-    stripped = _INLINE_CONSTRAINT_RE.sub(_record, pattern)
-    return stripped, constraints
 
 
-def load_rule_specs(pipeline_dir: Path) -> list[RuleSpec]:
-    """Load the Snakemake workflow at ``pipeline_dir`` and extract per-rule output specs.
+def _extract_script_path() -> Path:
+    """Resolve the absolute path of the `_extract.py` script shipped with this package."""
+    return Path(__file__).parent / "_extract.py"
 
-    Each rule contributes a :class:`RuleSpec` with its name, the raw output
-    pattern strings (with any inline ``{name,regex}`` constraint annotations
-    stripped), and the effective wildcard constraints. Precedence, low-to-high:
-    workflow-global < inline ``{name,regex}`` annotations on this rule's
-    outputs < rule-local ``wildcard_constraints`` block.
+
+def load_rule_specs(
+    pipeline_dir: Path,
+    configfiles: Sequence[Path] = (),
+) -> list[RuleSpec]:
+    """Load rule output specs by running the standalone extractor in a subprocess.
+
+    The signature is preserved from the in-process implementation so existing
+    third-party callers and the project's own test suite keep working.
     """
-    snakefile = resolve_snakefile(pipeline_dir)
+    return run_extractor(pipeline_dir, configfiles=configfiles)
 
-    # Local imports so the package can be imported without snakemake installed.
-    from snakemake.api import SnakemakeApi
-    from snakemake.settings.enums import Quietness
-    from snakemake.settings.types import (
-        ConfigSettings,
-        OutputSettings,
-        ResourceSettings,
-        StorageSettings,
-        WorkflowSettings,
+
+def run_extractor(
+    pipeline_dir: Path,
+    configfiles: Sequence[Path] = (),
+    *,
+    _python_exe_for_testing: Path | None = None,
+    _script_path_for_testing: Path | None = None,
+) -> list[RuleSpec]:
+    """Invoke the standalone extractor in a subprocess and return RuleSpec objects.
+
+    The two `_*_for_testing` kwargs are private test seams. They override
+    the `python` discovery and the script-path resolution respectively, so
+    error-path tests can substitute a stub script or a deliberately-missing
+    interpreter without touching the real environment.
+    """
+    if _python_exe_for_testing is not None:
+        python_exe = Path(_python_exe_for_testing)
+    else:
+        found = shutil.which("python")
+        if found is None:
+            raise ExtractorError(
+                "Python interpreter `python` not found on PATH. Activate "
+                "your workflow environment where you would normally run "
+                "`snakemake`."
+            )
+        python_exe = Path(found)
+
+    script_path = (
+        Path(_script_path_for_testing)
+        if _script_path_for_testing is not None
+        else _extract_script_path()
     )
 
-    # workdir is set to pipeline_dir so relative paths in the Snakefile
-    # (configfile:, include:, etc.) resolve as they would for a normal Snakemake
-    # invocation from that directory. A .snakemake/ subdirectory may be created
-    # there as a side effect — same place Snakemake itself would put it.
-    with SnakemakeApi(OutputSettings(quiet={Quietness.ALL})) as api:
-        workflow_api = api.workflow(
-            resource_settings=ResourceSettings(),
-            config_settings=ConfigSettings(),
-            storage_settings=StorageSettings(),
-            workflow_settings=WorkflowSettings(),
-            snakefile=snakefile,
-            workdir=pipeline_dir.resolve(),
+    cmd: list[str] = [str(python_exe), str(script_path), str(pipeline_dir)]
+    for cf in configfiles:
+        cmd.extend(["--configfile", str(cf)])
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise ExtractorError(
+            f"Extractor failed (exit {result.returncode}):\n{result.stderr.strip()}"
         )
-        # Snakemake 9's WorkflowApi parses the Snakefile lazily; accessing the
-        # underlying ``_workflow`` after constructing the WorkflowApi gives us
-        # the populated ``Workflow`` object with rules and wildcard_constraints
-        # available. No need to build the DAG.
-        workflow = workflow_api._workflow
-        global_constraints = dict(getattr(workflow, "wildcard_constraints", {}) or {})
 
-        specs: list[RuleSpec] = []
-        for rule in workflow.rules:
-            raw_outputs: list[str] = []
-            inline_constraints: dict[str, str] = {}
-            for o in rule.output:
-                stripped, inline = _strip_inline_constraints(str(o))
-                raw_outputs.append(stripped)
-                # Last inline annotation wins if a wildcard is annotated more
-                # than once across this rule's outputs; rule-local declarations
-                # override below regardless.
-                inline_constraints.update(inline)
-            rule_constraints = dict(getattr(rule, "wildcard_constraints", {}) or {})
-            # Merge precedence (low -> high):
-            #   workflow-global  <  inline {name,regex}  <  rule-local
-            effective = {
-                **global_constraints,
-                **inline_constraints,
-                **rule_constraints,
-            }
-            specs.append(
-                RuleSpec(name=rule.name, outputs=raw_outputs, constraints=effective)
-            )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ExtractorError(
+            "Extractor produced unparseable output. This is a bug; please "
+            f"report. stderr was:\n{result.stderr.strip()}"
+        ) from exc
 
-    return specs
+    return [
+        RuleSpec(
+            name=r["name"],
+            outputs=list(r["outputs"]),
+            constraints=dict(r["constraints"]),
+        )
+        for r in payload["rules"]
+    ]
 
 
-def find_rule_patterns(pipeline_dir: Path) -> list[tuple[str, re.Pattern]]:
+def find_rule_patterns(
+    pipeline_dir: Path,
+    configfiles: Sequence[Path] = (),
+) -> list[tuple[str, re.Pattern]]:
     """Top-level: return one (rule_name, compiled_regex) per output pattern.
 
     Rules with multiple outputs (e.g., multiext) contribute multiple entries, one
     per output file pattern.
     """
     out: list[tuple[str, re.Pattern]] = []
-    for spec in load_rule_specs(pipeline_dir):
+    for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
         for output_str in spec.outputs:
             regex_str = wildcard_pattern_to_regex(output_str, spec.constraints)
             out.append((spec.name, re.compile(regex_str)))
