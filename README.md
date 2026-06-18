@@ -4,7 +4,11 @@ Find 'orphan' files in a `snakemake` project's `results/` directory and delete t
 
 ## Motivation
 
-When developing a `snakemake` pipeline, I usually write and run rules iteratively, updating the output path with more and more wildcards such that I end up with many versions of a rule's output files, e.g. `results/{sample}/{replicate}/output.txt` becomes `results/{sample}/{replicate}/{normalisation}/output.txt` becomes `results/{sample}/{replicate}/{normalisation}/{count_threshold}/output.txt` and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these file s up.
+When developing a `snakemake` pipeline, I usually write and run rules iteratively, updating the output path with more and more wildcards such that I end up with many versions of a rule's output files, e.g.
+* `results/{sample}/{replicate}/output.txt` becomes
+* `results/{sample}/{replicate}/{normalisation}/output.txt` becomes
+* `results/{sample}/{replicate}/{normalisation}/{count_threshold}/output.txt`
+...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these file s up.
 
 `snakeprune` ingests workflow via the `snakemake` Python API, builds a regex pattern per rule output, walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
