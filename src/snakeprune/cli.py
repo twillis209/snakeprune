@@ -22,6 +22,9 @@ from snakeprune.walker import (
 )
 
 PROGRESS_INTERVAL = 10000
+DEFAULT_NAUGHTY_DIRS = frozenset(
+    {"resources", "config", "profile", "workflow", ".snakemake"}
+)
 
 
 def _stdin_isatty() -> bool:
@@ -83,6 +86,16 @@ def scan(
         "--configfile",
         help="Snakemake configfile to pass to the extractor; repeatable.",
     ),
+    naughty_dir: Optional[list[str]] = typer.Option(
+        None,
+        "--naughty-dir",
+        help="Extra directory basename to treat as a suspicious target; repeatable.",
+    ),
+    allow_naughty_dir: bool = typer.Option(
+        False,
+        "--allow-naughty-dir",
+        help="Bypass the delete/trash refusal when the target dir basename is on the naughty list.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -90,6 +103,24 @@ def scan(
     def log(msg: str) -> None:
         if not quiet:
             typer.echo(msg, err=True)
+
+    naughty = DEFAULT_NAUGHTY_DIRS | set(naughty_dir or ())
+    if results_dir.name in naughty:
+        typer.echo(
+            f"WARNING: `{results_dir.name}` is a conventional Snakemake "
+            f"input/config directory and is unlikely to contain prunable rule "
+            f"outputs. Review the orphan list carefully — this may be the wrong "
+            f"target.",
+            err=True,
+        )
+        if (delete or trash is not None) and not allow_naughty_dir:
+            typer.echo(
+                f"Refusing to delete: `{results_dir.name}` looks like a "
+                f"Snakemake input/config directory. Pass --allow-naughty-dir "
+                f"to override.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
 
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:

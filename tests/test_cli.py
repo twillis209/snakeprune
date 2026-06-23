@@ -427,3 +427,98 @@ def test_cli_scan_forwards_configfile_to_extractor(make_pipeline, tmp_path):
     )
     assert result_with_cfg.exit_code == 0
     assert "qc/s1.tsv" not in result_with_cfg.stdout
+
+
+def test_cli_scan_naughty_dir_dry_run_warns_but_proceeds(make_pipeline, tmp_path):
+    # Rule writes under `resources/` so the basename-mismatch refusal does NOT
+    # fire; this isolates the naughty-dir warning on a clean dry-run.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'resources/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "obsolete.csv").write_text("x")
+    result = runner.invoke(app, ["scan", str(pipeline), str(resources)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "resources" in combined
+    assert "input/config directory" in combined
+    # Dry-run still lists the orphan.
+    assert "obsolete.csv" in result.stdout
+
+
+def test_cli_scan_naughty_dir_delete_refuses(make_pipeline, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "obsolete.csv").write_text("x")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(config), "--delete", "--yes"]
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "--allow-naughty-dir" in combined
+    # Refusal happens before the workflow is even loaded.
+    assert "Loading Snakemake workflow" not in combined
+    # Nothing deleted.
+    assert (config / "obsolete.csv").exists()
+
+
+def test_cli_scan_naughty_dir_delete_allowed_proceeds(make_pipeline, tmp_path):
+    # Rule writes under `config/` so basename-mismatch does not interfere;
+    # --allow-naughty-dir lets the delete flow run.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'config/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "obsolete.csv").write_text("x")
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(config),
+            "--delete", "--yes", "--allow-naughty-dir", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 0
+    assert not (config / "obsolete.csv").exists()
+
+
+def test_cli_scan_naughty_dir_custom_via_flag(make_pipeline, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    custom = tmp_path / "custom_inputs"
+    custom.mkdir()
+    (custom / "obsolete.csv").write_text("x")
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(custom), "--delete", "--yes", "--naughty-dir", "custom_inputs"],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "custom_inputs" in combined
+    assert "--allow-naughty-dir" in combined
+
+
+def test_cli_scan_non_naughty_dir_no_warning(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obsolete.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "input/config directory" not in combined
