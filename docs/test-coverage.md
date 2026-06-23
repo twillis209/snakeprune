@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **96 tests**, split across four files:
+As of this writing the suite is **99 tests**, split across four files:
 
 - `tests/test_patterns.py` (35) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (16) — does it find the right files on disk?
 - `tests/test_delete.py` (10) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (35) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (38) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -145,7 +145,14 @@ genuinely mean it.
    clean `Refusing to delete: …` message and exit code 3, instead of an
    uncaught error and a stack trace.
 
-9. **`--trash` as a reversible alternative.** Instead of unlinking, you can move
+9. **`--limit` cannot be combined with deletion.** `--limit` is a benchmarking
+   aid that truncates the scan after N files, which makes the orphan set partial
+   and the orphan-rate guard meaningless. Passing it together with `--delete` or
+   `--trash` is refused outright (exit 3) before anything is scanned, so it can
+   never delete an arbitrary subset of a half-finished scan. On its own, for a
+   dry run, it stays legal. All three cases are tested.
+
+10. **`--trash` as a reversible alternative.** Instead of unlinking, you can move
    orphans into a trash directory; the original relative structure is preserved
    under `<trash>/<results-dir-name>/…`, and the namespacing lets one trash
    directory serve multiple results directories without collisions.
@@ -171,13 +178,6 @@ not test a clever edge case; they test the boring promise the tool makes.
 ## What is NOT yet covered (read this part too)
 
 Trust comes from knowing the edges, so here are the gaps that remain:
-
-- **`--limit` combined with `--delete`.** `--limit` exists for benchmarking and
-  stops the scan after N files. Nothing currently prevents combining it with
-  `--delete`, which would delete orphans from a *partial* scan and compute the
-  orphan-rate guard against the truncated count. This is a known footgun; the
-  safest fix is probably to make `--limit` refuse to combine with deletion. Not
-  yet done.
 
 - **`--delete` with zero orphans.** The no-op path (nothing to delete, no
   prompt, clean exit) is believed correct but is not pinned by an explicit test.

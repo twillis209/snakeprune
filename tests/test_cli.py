@@ -646,3 +646,65 @@ def test_cli_scan_symlink_orphan_delete_refuses_cleanly(
     assert (results / "stale_link.csv").is_symlink()
     assert (results / "1.txt").exists()
     assert target.exists()
+
+
+def test_cli_scan_limit_with_delete_refuses(make_pipeline, make_results):
+    # --limit stops the scan early, so the orphan set is partial. Combining it
+    # with --delete would delete an arbitrary subset against a truncated
+    # orphan-rate denominator; the tool must refuse instead.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv", "obsolete2.csv"])
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--limit", "1", "--delete", "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "--limit" in combined
+    # Nothing deleted: both orphans remain.
+    assert (results / "obsolete.csv").exists()
+    assert (results / "obsolete2.csv").exists()
+
+
+def test_cli_scan_limit_with_trash_refuses(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv", "obsolete2.csv"])
+    trash = tmp_path / "trash"
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--limit", "1", "--trash", str(trash), "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "--limit" in combined
+    assert (results / "obsolete.csv").exists()
+    assert (results / "obsolete2.csv").exists()
+    assert not trash.exists()
+
+
+def test_cli_scan_limit_without_delete_is_allowed(make_pipeline, make_results):
+    # --limit is a benchmarking aid for dry-run scans; on its own it stays legal.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obsolete.csv"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--limit", "1"]
+    )
+    assert result.exit_code == 0

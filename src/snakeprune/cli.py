@@ -111,6 +111,15 @@ def scan(
         if not quiet:
             typer.echo(msg, err=True)
 
+    if limit is not None and (delete or trash is not None):
+        typer.echo(
+            "Refusing to delete: --limit truncates the scan, so the orphan set "
+            "would be partial and the orphan-rate guard meaningless. Drop "
+            "--limit to delete, or drop --delete/--trash to benchmark.",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+
     naughty = DEFAULT_NAUGHTY_DIRS | set(naughty_dir or ())
     if results_dir.name in naughty:
         typer.echo(
