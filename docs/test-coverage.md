@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **99 tests**, split across four files:
+As of this writing the suite is **104 tests**, split across four files:
 
 - `tests/test_patterns.py` (35) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (16) — does it find the right files on disk?
-- `tests/test_delete.py` (10) — does the deletion primitive refuse the things
+- `tests/test_delete.py` (12) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (38) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (41) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -152,10 +152,17 @@ genuinely mean it.
    never delete an arbitrary subset of a half-finished scan. On its own, for a
    dry run, it stays legal. All three cases are tested.
 
-10. **`--trash` as a reversible alternative.** Instead of unlinking, you can move
-   orphans into a trash directory; the original relative structure is preserved
-   under `<trash>/<results-dir-name>/…`, and the namespacing lets one trash
-   directory serve multiple results directories without collisions.
+10. **`--trash` as a reversible alternative, and it won't clobber itself.**
+   Instead of unlinking, you can move orphans into a trash directory; the
+   original relative structure is preserved under
+   `<trash>/<results-dir-name>/…`, and the namespacing lets one trash directory
+   serve multiple results directories without collisions. If a *previous* run
+   already left a file at the same path in the trash, the move is refused (exit
+   3) rather than silently overwriting it — otherwise the safety net would quietly
+   destroy your earlier recovery copy, which is exactly the failure the trash is
+   meant to prevent. Like the deletion guards, this collision check runs in the
+   all-or-nothing pre-flight pass, so one colliding orphan aborts the whole batch
+   before anything has moved.
 
 ## The headline data-loss invariants
 
@@ -175,19 +182,20 @@ not test a clever edge case; they test the boring promise the tool makes.
   and nothing that was reported as an orphan survived. There are no surprise
   deletions beyond the list you were shown.
 
+Two further tests pin the quiet, boring cases that a careful operator relies on:
+
+- **`--delete` with nothing to delete is a clean no-op.** When every file is
+  live, `--delete` skips the confirmation prompt and the non-interactive refusal
+  entirely and exits 0 with everything in place — it does not stall waiting for a
+  yes, and it does not error.
+
+- **Deleting twice is safe.** A second `--delete` over an already-cleaned tree
+  finds zero orphans and exits cleanly, leaving the live files untouched. Re-runs
+  don't compound.
+
 ## What is NOT yet covered (read this part too)
 
 Trust comes from knowing the edges, so here are the gaps that remain:
-
-- **`--delete` with zero orphans.** The no-op path (nothing to delete, no
-  prompt, clean exit) is believed correct but is not pinned by an explicit test.
-
-- **Idempotent re-runs.** Running `--delete` twice in a row should find zero
-  orphans the second time; not explicitly tested.
-
-- **Trash collisions.** If a previous run already moved a file of the same
-  relative path into the trash directory, the overwrite-vs-refuse behaviour is
-  undefined and untested.
 
 - **Case-insensitive filesystems** (e.g. default macOS) and **dotfiles**: the
   matcher is case-sensitive and the walker includes dotfiles; neither is

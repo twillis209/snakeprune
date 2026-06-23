@@ -279,6 +279,6 @@ def scan(
                 trash_dir=trash,
                 results_dir_name=results_dir.name if trash is not None else None,
             )
-        except (PermissionError, IsADirectoryError) as exc:
+        except (PermissionError, IsADirectoryError, FileExistsError) as exc:
             typer.echo(f"Refusing to delete: {exc}", err=True)
             raise typer.Exit(code=3)

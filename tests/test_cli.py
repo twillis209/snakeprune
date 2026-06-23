@@ -708,3 +708,73 @@ def test_cli_scan_limit_without_delete_is_allowed(make_pipeline, make_results):
         app, ["scan", str(pipeline), str(results), "--limit", "1"]
     )
     assert result.exit_code == 0
+
+
+def test_cli_scan_trash_collision_refuses(make_pipeline, make_results, tmp_path):
+    # A prior run already trashed a file at the same relative path. The new run
+    # must refuse cleanly (exit 3) rather than clobber the earlier trashed copy.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["obsolete.csv"])
+    (results / "obsolete.csv").write_text("new")
+    trash = tmp_path / "trash"
+    prior = trash / results.name / "obsolete.csv"
+    prior.parent.mkdir(parents=True)
+    prior.write_text("old")
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--trash", str(trash), "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "already exists" in combined
+    # Source orphan untouched; prior trashed copy intact.
+    assert (results / "obsolete.csv").read_text() == "new"
+    assert prior.read_text() == "old"
+
+
+def test_cli_scan_delete_with_zero_orphans_is_clean_noop(make_pipeline, make_results):
+    # Everything is live. --delete (even without --yes) must skip the prompt /
+    # non-TTY refusal entirely and exit 0 with nothing removed.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "2.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete"])
+    assert result.exit_code == 0
+    assert (results / "1.txt").exists()
+    assert (results / "2.txt").exists()
+
+
+def test_cli_scan_delete_is_idempotent_on_rerun(make_pipeline, make_results):
+    # Deleting twice is safe: the second pass finds zero orphans and exits clean.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obsolete.csv"])
+    first = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-high-orphan-rate"],
+    )
+    assert first.exit_code == 0
+    assert not (results / "obsolete.csv").exists()
+    assert (results / "1.txt").exists()
+
+    second = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-high-orphan-rate"],
+    )
+    assert second.exit_code == 0
+    assert (results / "1.txt").exists()
+    combined = second.stdout + (second.stderr or "")
+    assert "found 0 orphan" in combined.lower()

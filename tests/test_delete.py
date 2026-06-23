@@ -141,3 +141,53 @@ def test_delete_orphans_validates_directory_before_deleting_any(tmp_path):
         )
     assert good.exists()
     assert d.is_dir()
+
+
+def test_delete_orphans_trash_refuses_when_target_exists(tmp_path):
+    # A prior run already left a file at the trash target. Moving a new orphan
+    # to the same relative path must refuse rather than silently overwrite the
+    # previously-trashed copy (which shutil.move would do on POSIX).
+    src_dir = tmp_path / "results"
+    src_dir.mkdir()
+    f = src_dir / "a.txt"
+    f.write_text("new")
+    trash = tmp_path / "trash"
+    prior = trash / "results" / "a.txt"
+    prior.parent.mkdir(parents=True)
+    prior.write_text("old")
+    with pytest.raises(FileExistsError):
+        delete_orphans(
+            [OrphanFile(path=f, rel="a.txt")],
+            trash_dir=trash,
+            results_dir_name="results",
+        )
+    # Neither the source nor the previously-trashed copy is touched.
+    assert f.read_text() == "new"
+    assert prior.read_text() == "old"
+
+
+def test_delete_orphans_trash_collision_check_is_all_or_nothing(tmp_path):
+    # The collision check runs in the pre-flight pass, so a colliding orphan
+    # late in the batch aborts before any earlier orphan has been moved.
+    src_dir = tmp_path / "results"
+    src_dir.mkdir()
+    first = src_dir / "first.txt"
+    first.write_text("first")
+    collide = src_dir / "collide.txt"
+    collide.write_text("new")
+    trash = tmp_path / "trash"
+    prior = trash / "results" / "collide.txt"
+    prior.parent.mkdir(parents=True)
+    prior.write_text("old")
+    with pytest.raises(FileExistsError):
+        delete_orphans(
+            [
+                OrphanFile(path=first, rel="first.txt"),
+                OrphanFile(path=collide, rel="collide.txt"),
+            ],
+            trash_dir=trash,
+            results_dir_name="results",
+        )
+    # The non-colliding orphan must still be in place.
+    assert first.read_text() == "first"
+    assert not (trash / "results" / "first.txt").exists()
