@@ -9,7 +9,7 @@ When developing a `snakemake` pipeline, I usually write and run rules iterativel
 * `results/{sample}/{replicate}/{normalisation}/output.txt` becomes
 * `results/{sample}/{replicate}/{normalisation}/{count_threshold}/output.txt`
 
-...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these file s up.
+...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these files up.
 
 `snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per rule output, walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
@@ -43,6 +43,9 @@ snakeprune scan path/to/pipeline path/to/results --rule-attribution
 # Skip intentional manual files (repeatable; supports prefix/** for directories)
 snakeprune scan path/to/pipeline path/to/results --ignore "notes/**" --ignore "*.log"
 
+# Skip an entire subtree from the walk (faster than --ignore for big dirs)
+snakeprune scan path/to/pipeline path/to/results --exclude-dir old_results_to_keep
+
 # Actually delete (refuses symlinks unless --allow-symlinks)
 snakeprune scan path/to/pipeline path/to/results --delete
 
@@ -67,6 +70,7 @@ snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yam
 - **Empty rule list.** If the workflow loads but produces zero output patterns (e.g. all rules are gated behind config that wasn't passed), `snakeprune` refuses to scan rather than report every file as an orphan. Override with `--allow-empty-rules`.
 - **Results-dir / rule-prefix mismatch.** If you point at `path/to/foo/` but no rule writes under `foo/`, every file would look like an orphan. `snakeprune` refuses and surfaces the prefixes the rules actually use. Override with `--allow-basename-mismatch`.
 - **High orphan rate.** When more than `--orphan-rate-threshold` (default 0.5) of scanned files would be orphans, `snakeprune` prints a loud warning and — under `--delete` / `--trash` — refuses unless `--allow-high-orphan-rate` is also passed. Pass `--orphan-rate-threshold 1.0` to disable the check entirely.
+- **Naughty target directories.** Targeting a conventional Snakemake input/config directory (`resources`, `config`, `profile`, `workflow`, `.snakemake`) prints a warning, and — under `--delete` / `--trash` — refuses unless `--allow-naughty-dir` is passed. The check fires before the workflow is even loaded, and especially guards against pointing at `resources/` (downloaded reference data). Extend the list for a run with `--naughty-dir NAME` (repeatable).
 
 ### Deletion flow
 
@@ -83,6 +87,7 @@ snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yam
 
 ### Limitations
 
+- **`--exclude-dir` vs `--ignore`:** `--exclude-dir DIR` prunes a whole subtree from the walk (the directory is never descended into), which is faster than `--ignore "DIR/**"` for large directories you want to protect. `--ignore` remains for file-level glob filtering. Relative `--exclude-dir` paths resolve against the results directory.
 - **Config-conditional rules.** If a rule is `include:`-d only under specific config values, pass the matching config with `--configfile path/to/config.yaml` (repeatable). Without it, the extractor sees an empty config and config-gated rules are absent — their outputs would then be reported as orphans.
 - **Symlinked subdirectories are not recursed.** Files reachable only via a symlinked subdirectory are never scanned. The CLI surfaces a one-line count of skipped symlinked subdirectories at the end of the walk so this is at least visible.
 - **Module-imported rules** (`module foo: snakefile: ...; use rule * from foo`) are supported, including the `prefix:` directive. Less-common configurations (heavy `with: output:` overrides, deeply nested modules) are not specifically tested — review the orphan list before deleting.
