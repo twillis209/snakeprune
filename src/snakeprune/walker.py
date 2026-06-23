@@ -39,10 +39,16 @@ def iter_results_files(
     cached dirent on filesystems that support ``d_type``, avoiding the extra
     ``stat`` syscalls that ``Path.rglob`` + ``Path.is_file/is_symlink`` incur.
 
+    ``exclude_dirs`` is an iterable of directory path strings (absolute or
+    relative; normalised internally with ``os.path.abspath``) whose subtrees
+    are pruned entirely from the walk — the directory is never descended into.
+
     If ``stats`` is provided, the walker initialises
     ``stats["skipped_symlinked_dirs"] = 0`` and increments it once per
     directory entry that is a symlink to a directory and is being skipped
-    because ``follow_symlinks=False``.
+    because ``follow_symlinks=False``. It likewise initialises
+    ``stats["excluded_dirs"] = 0`` and increments it once per directory
+    pruned by ``exclude_dirs``.
     """
     ignore_globs = tuple(ignore_globs)
     exclude_set = {os.path.abspath(p) for p in exclude_dirs}
