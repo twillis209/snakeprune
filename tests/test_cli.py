@@ -522,3 +522,35 @@ def test_cli_scan_non_naughty_dir_no_warning(make_pipeline, make_results):
     assert result.exit_code == 0
     combined = result.stdout + (result.stderr or "")
     assert "input/config directory" not in combined
+
+
+def test_cli_scan_exclude_dir_relative_prunes_subtree(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    # 'keep/old.csv' would be an orphan, but is excluded; '1.txt' is live.
+    results = make_results(["1.txt", "keep/old.csv"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--exclude-dir", "keep"]
+    )
+    assert result.exit_code == 0
+    assert "old.csv" not in result.stdout
+    combined = result.stdout + (result.stderr or "")
+    assert "Excluded 1 directory subtree" in combined
+
+
+def test_cli_scan_exclude_dir_absolute_path(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "keep/old.csv"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--exclude-dir", str(results / "keep")],
+    )
+    assert result.exit_code == 0
+    assert "old.csv" not in result.stdout

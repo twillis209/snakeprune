@@ -1,6 +1,7 @@
 """snakeprune CLI."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -96,6 +97,12 @@ def scan(
         "--allow-naughty-dir",
         help="Bypass the delete/trash refusal when the target dir basename is on the naughty list.",
     ),
+    exclude_dir: Optional[list[str]] = typer.Option(
+        None,
+        "--exclude-dir",
+        help="Directory subtree to skip entirely; repeatable. Relative paths "
+             "resolve against results_dir.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -165,10 +172,16 @@ def scan(
     file_count = 0
     target_prefix = results_dir.name + "/"
     walk_stats: dict = {}
+    exclude_set: set[str] = set()
+    for d in exclude_dir or ():
+        p = Path(d)
+        resolved = p if p.is_absolute() else results_dir / p
+        exclude_set.add(os.path.abspath(resolved))
     for full_path, rel in iter_results_files(
         results_dir,
         ignore_globs=tuple(ignore or ()),
         follow_symlinks=follow_symlinks,
+        exclude_dirs=tuple(exclude_set),
         stats=walk_stats,
     ):
         if limit is not None and file_count >= limit:
@@ -189,6 +202,13 @@ def scan(
         typer.echo(
             f"Skipped {skipped_dirs} symlinked subdirector{suffix}; files "
             f"reachable only via those paths were not scanned.",
+            err=True,
+        )
+
+    excluded_dirs = walk_stats.get("excluded_dirs", 0)
+    if excluded_dirs > 0:
+        typer.echo(
+            f"Excluded {excluded_dirs} directory subtree(s) from the scan.",
             err=True,
         )
 
