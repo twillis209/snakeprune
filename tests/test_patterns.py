@@ -443,3 +443,21 @@ def test_run_extractor_bad_json_message(make_pipeline, tmp_path):
     msg = str(exc.value)
     assert "unparseable" in msg
     assert "garbage produced for testing" in msg
+
+
+def test_run_extractor_callable_output_fails_loudly(make_pipeline):
+    # A function/callable output is rejected by Snakemake itself at load time
+    # ("Only input files can be specified as functions"), so it can never reach
+    # str(o) and be silently turned into a bogus orphan-matching pattern.
+    # snakeprune must surface that rejection as a loud ExtractorError (CLI exit
+    # 4), never produce an empty/garbage pattern set.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: lambda wildcards: 'results/x.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    with pytest.raises(ExtractorError) as exc:
+        run_extractor(pipeline)
+    msg = str(exc.value)
+    assert "Extractor failed" in msg
+    assert "function" in msg.lower()
