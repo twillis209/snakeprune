@@ -263,9 +263,13 @@ def scan(
             if answer.strip().lower() not in {"y", "yes"}:
                 typer.echo("Aborted.", err=True)
                 raise typer.Exit(code=0)
-        delete_orphans(
-            orphans,
-            allow_symlinks=allow_symlinks,
-            trash_dir=trash,
-            results_dir_name=results_dir.name if trash is not None else None,
-        )
+        try:
+            delete_orphans(
+                orphans,
+                allow_symlinks=allow_symlinks,
+                trash_dir=trash,
+                results_dir_name=results_dir.name if trash is not None else None,
+            )
+        except (PermissionError, IsADirectoryError) as exc:
+            typer.echo(f"Refusing to delete: {exc}", err=True)
+            raise typer.Exit(code=3)

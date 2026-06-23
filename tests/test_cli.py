@@ -554,3 +554,95 @@ def test_cli_scan_exclude_dir_absolute_path(make_pipeline, make_results):
     )
     assert result.exit_code == 0
     assert "old.csv" not in result.stdout
+
+
+def test_cli_scan_delete_preserves_live_files(make_pipeline, make_results):
+    # The false-positive catastrophe: with live and orphan files side by side,
+    # --delete must remove only the orphan and leave every live file intact.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "2.txt", "obsolete.csv"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 0
+    assert not (results / "obsolete.csv").exists()
+    assert (results / "1.txt").exists()
+    assert (results / "2.txt").exists()
+
+
+def test_cli_scan_delete_removes_exactly_the_reported_orphans(
+    make_pipeline, make_results
+):
+    # Strong invariant across a multi-rule, nested tree: the files removed by
+    # --delete are exactly the files the dry-run reported — no live file is
+    # touched, and no orphan survives.
+    pipeline = make_pipeline(
+        "rule align:\n"
+        "    output: 'results/align/{sample}.bam'\n"
+        "    shell: 'touch {output}'\n"
+        "\n"
+        "rule call:\n"
+        "    output: 'results/call/{sample}.vcf'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    live = ["align/s1.bam", "align/s2.bam", "call/s1.vcf"]
+    orphans = ["align/old.tmp", "call/stale.txt", "misc/junk.dat"]
+    results = make_results(live + orphans)
+
+    # Dry-run: the report lists every orphan and no live file.
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 0
+    dry_out = dry.stdout + (dry.stderr or "")
+    for rel in orphans:
+        assert str(results / rel) in dry_out
+    for rel in live:
+        assert str(results / rel) not in dry_out
+
+    # Delete: the surviving tree is exactly the live set.
+    deleted = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-high-orphan-rate"],
+    )
+    assert deleted.exit_code == 0
+    remaining = {
+        p.relative_to(results).as_posix()
+        for p in results.rglob("*")
+        if p.is_file()
+    }
+    assert remaining == set(live)
+
+
+def test_cli_scan_symlink_orphan_delete_refuses_cleanly(
+    make_pipeline, make_results, tmp_path
+):
+    # --follow-symlinks surfaces a symlinked file as an orphan; without
+    # --allow-symlinks the delete must refuse with a clean exit 3 and a message
+    # (not crash with a traceback), and must delete nothing.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])  # live
+    target = tmp_path / "outside.txt"
+    target.write_text("x")
+    (results / "stale_link.csv").symlink_to(target)
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--follow-symlinks", "--delete", "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "--allow-symlinks" in combined
+    # Nothing deleted: the symlink and the live file both remain.
+    assert (results / "stale_link.csv").is_symlink()
+    assert (results / "1.txt").exists()
+    assert target.exists()

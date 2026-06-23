@@ -101,3 +101,43 @@ def test_delete_orphans_trash_requires_results_dir_name(tmp_path):
             trash_dir=trash,
             results_dir_name=None,
         )
+
+
+def test_delete_orphans_validates_whole_batch_before_deleting_any(tmp_path):
+    # All-or-nothing: a single bad orphan (a symlink without the flag) must abort
+    # the entire batch *before* any valid orphan is removed. Otherwise a bad
+    # entry late in the list silently destroys the files listed before it.
+    good = tmp_path / "good.txt"
+    good.write_text("data")
+    target = tmp_path / "real.txt"
+    target.write_text("data")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+    with pytest.raises(PermissionError):
+        delete_orphans(
+            [
+                OrphanFile(path=good, rel="good.txt"),
+                OrphanFile(path=link, rel="link.txt"),
+            ],
+            allow_symlinks=False,
+        )
+    # The valid file must survive: validation happens before any unlink.
+    assert good.exists()
+    assert link.is_symlink()
+
+
+def test_delete_orphans_validates_directory_before_deleting_any(tmp_path):
+    good = tmp_path / "good.txt"
+    good.write_text("data")
+    d = tmp_path / "subdir"
+    d.mkdir()
+    with pytest.raises(IsADirectoryError):
+        delete_orphans(
+            [
+                OrphanFile(path=good, rel="good.txt"),
+                OrphanFile(path=d, rel="subdir"),
+            ],
+            allow_symlinks=False,
+        )
+    assert good.exists()
+    assert d.is_dir()
