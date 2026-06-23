@@ -23,6 +23,7 @@ def iter_results_files(
     results_dir: Path,
     ignore_globs: Iterable[str] = (),
     follow_symlinks: bool = False,
+    exclude_dirs: Iterable[str] = (),
     stats: dict | None = None,
 ) -> Iterator[tuple[str, str]]:
     """Yield ``(full_path, rel_posix)`` string pairs for regular files under
@@ -44,8 +45,10 @@ def iter_results_files(
     because ``follow_symlinks=False``.
     """
     ignore_globs = tuple(ignore_globs)
+    exclude_set = {os.path.abspath(p) for p in exclude_dirs}
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
+        stats["excluded_dirs"] = 0
     base_str = os.fspath(results_dir)
     base_len = len(base_str) + 1  # length of "<base>/" prefix to strip
     sep = os.sep
@@ -78,6 +81,10 @@ def iter_results_files(
                     # even when `follow_symlinks=True` (which only governs
                     # whether symlinked *files* are yielded).
                     if not is_link and entry.is_dir(follow_symlinks=False):
+                        if exclude_set and os.path.abspath(entry.path) in exclude_set:
+                            if stats is not None:
+                                stats["excluded_dirs"] += 1
+                            continue
                         stack.append(entry.path)
                         continue
                     if not entry.is_file(follow_symlinks=True):
