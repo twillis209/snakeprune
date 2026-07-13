@@ -94,7 +94,11 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
         for rule in workflow.rules:
             raw_outputs: list[str] = []
             inline_constraints: dict[str, str] = {}
-            for o in rule.output:
+            produced = list(rule.output) + list(rule.log)
+            benchmark = getattr(rule, "benchmark", None)
+            if benchmark:
+                produced.append(benchmark)
+            for o in produced:
                 stripped, inline = _strip_inline_constraints(str(o))
                 raw_outputs.append(stripped)
                 inline_constraints.update(inline)

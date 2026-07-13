@@ -468,6 +468,34 @@ def test_run_extractor_workflow_layout_uses_project_root_as_workdir(tmp_path):
     assert [s.name for s in specs] == ["a"]
 
 
+def test_run_extractor_includes_log_paths(make_pipeline):
+    # A rule's log: files are produced by the rule just like its outputs, so they
+    # must be emitted as live patterns. Otherwise a log file under the scanned
+    # directory is flagged as an orphan (and --delete would remove it).
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        "    log: 'logs/{sample}.log'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    outputs = specs[0].outputs
+    assert "results/{sample}.txt" in outputs
+    assert "logs/{sample}.log" in outputs
+
+
+def test_run_extractor_includes_benchmark_path(make_pipeline):
+    # benchmark: files are rule-produced too and carry the same deletion risk.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        "    benchmark: 'benchmarks/{sample}.tsv'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert "benchmarks/{sample}.tsv" in specs[0].outputs
+
+
 def test_run_extractor_callable_output_fails_loudly(make_pipeline):
     # A function/callable output is rejected by Snakemake itself at load time
     # ("Only input files can be specified as functions"), so it can never reach

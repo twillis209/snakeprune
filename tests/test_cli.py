@@ -19,6 +19,21 @@ def test_cli_scan_reports_orphans(make_pipeline, make_results):
     assert "1.txt" not in result.stdout
 
 
+def test_cli_scan_recognises_log_files_as_live(make_pipeline, make_results):
+    # A rule's log: file lives under the scanned results dir. Because the rule
+    # produces it, it must be recognised as live, not reported as an orphan.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        "    log: 'results/logs/{sample}.log'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "logs/1.log"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    assert "1.log" not in result.stdout
+
+
 def test_cli_scan_dry_run_does_not_delete(make_pipeline, make_results):
     pipeline = make_pipeline(
         "rule a:\n"

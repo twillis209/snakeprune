@@ -11,7 +11,7 @@ When developing a `snakemake` pipeline, I usually write and run rules iterativel
 
 ...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these files up.
 
-`snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per rule output, walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
+`snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per file a rule produces (its `output`, `log`, and `benchmark` paths), walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
 ## Install
 
@@ -109,7 +109,7 @@ If `python` is not on `$PATH`, `snakeprune` exits with code 4 and a message aski
 
 1. Resolve the Snakefile (direct, then `workflow/Snakefile` fallback).
 2. Locate `python` on `$PATH` and run the bundled `_extract.py` script as a subprocess: `<python> .../_extract.py <pipeline_dir> [--configfile ...]`. The subprocess loads the workflow via `snakemake.api.SnakemakeApi`, walks `workflow.rules`, and emits `{"rules": [...]}` JSON on stdout.
-3. For each rule's outputs, substitute `{wildcard}` placeholders with their effective regex bodies (rule-local `wildcard_constraints` override workflow-global; inline `{name,regex}` annotations are honoured; missing constraints default to `[^/]+`). The combined alternation regex is built once for the whole scan.
+3. For each file a rule produces (`output`, `log`, and `benchmark` paths), substitute `{wildcard}` placeholders with their effective regex bodies (rule-local `wildcard_constraints` override workflow-global; inline `{name,regex}` annotations are honoured; missing constraints default to `[^/]+`). The combined alternation regex is built once for the whole scan.
 4. Walk the `results/` tree, skipping symlinks by default and any path matching an `--ignore` glob.
 5. For each regular file, match the path against all compiled rule patterns. Files matching none are orphans.
 6. With `--rule-attribution`, report each orphan with the rule whose literal path prefix it most closely resembles.
