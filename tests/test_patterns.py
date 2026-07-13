@@ -445,6 +445,29 @@ def test_run_extractor_bad_json_message(make_pipeline, tmp_path):
     assert "garbage produced for testing" in msg
 
 
+def test_run_extractor_workflow_layout_uses_project_root_as_workdir(tmp_path):
+    # Standard Snakemake layout: the Snakefile lives under workflow/, and the
+    # workflow reads a project-root-relative file (resources/...) at load time.
+    # Snakemake's convention is that the working directory is the PARENT of
+    # workflow/, so resources/... resolves against the project root. When
+    # snakeprune is pointed straight at workflow/, it must load with that same
+    # workdir; otherwise the top-level read fails with FileNotFoundError and the
+    # scan aborts (exit 2).
+    root = tmp_path / "proj"
+    (root / "workflow").mkdir(parents=True)
+    (root / "resources").mkdir()
+    (root / "resources" / "samples.txt").write_text("s1\n")
+    (root / "workflow" / "Snakefile").write_text(
+        "with open('resources/samples.txt') as _f:\n"
+        "    _f.read()\n"
+        "rule a:\n"
+        "    output: 'results/a.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(root / "workflow")
+    assert [s.name for s in specs] == ["a"]
+
+
 def test_run_extractor_callable_output_fails_loudly(make_pipeline):
     # A function/callable output is rejected by Snakemake itself at load time
     # ("Only input files can be specified as functions"), so it can never reach

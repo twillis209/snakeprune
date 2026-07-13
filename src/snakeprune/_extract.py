@@ -52,6 +52,20 @@ def _resolve_snakefile(pipeline_dir: Path) -> Path:
     )
 
 
+def _resolve_workdir(snakefile: Path) -> Path:
+    """Working directory Snakemake would use for this Snakefile.
+
+    Snakemake's project-layout convention: a Snakefile under a directory named
+    `workflow/` is run from that directory's parent (the project root), so paths
+    like `resources/...` and `results/...` resolve against the root. Anywhere
+    else, the Snakefile's own directory is the working directory.
+    """
+    parent = snakefile.resolve().parent
+    if parent.name == "workflow":
+        return parent.parent
+    return parent
+
+
 def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> dict:
     from snakemake.api import SnakemakeApi
     from snakemake.settings.enums import Quietness
@@ -106,7 +120,7 @@ def extract(pipeline_dir: Path, configfiles: list[Path]) -> dict:
     snakefile = _resolve_snakefile(pipeline_dir)
     return _load_workflow(
         snakefile=snakefile,
-        workdir=pipeline_dir.resolve(),
+        workdir=_resolve_workdir(snakefile),
         configfiles=configfiles,
     )
 
