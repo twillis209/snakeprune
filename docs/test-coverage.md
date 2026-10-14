@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **137 tests**, split across four files:
+As of this writing the suite is **144 tests**, split across four files:
 
-- `tests/test_patterns.py` (59) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (61) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (11) — does it find the right files on disk?
 - `tests/test_delete.py` (14) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (53) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (58) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
