@@ -57,7 +57,7 @@ def scan(
     allow_empty_rules: bool = typer.Option(
         False,
         "--allow-empty-rules",
-        help="Bypass refusal when the workflow has 0 output patterns.",
+        help="Bypass refusal when the workflow has 0 path patterns.",
     ),
     allow_basename_mismatch: bool = typer.Option(
         False,

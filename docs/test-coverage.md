@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **104 tests**, split across four files:
+As of this writing the suite is **137 tests**, split across four files:
 
-- `tests/test_patterns.py` (35) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (59) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
-- `tests/test_walker.py` (16) — does it find the right files on disk?
-- `tests/test_delete.py` (12) — does the deletion primitive refuse the things
+- `tests/test_walker.py` (11) — does it find the right files on disk?
+- `tests/test_delete.py` (14) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (41) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (53) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -85,6 +85,19 @@ walker counts and surfaces how many it skipped so a silently-unscanned subtree
 cannot hide from you. The `--exclude-dir` option prunes whole subtrees from the
 scan, and that pruning is tested for relative paths, absolute paths,
 non-existent paths (a no-op, not an error), and the reported tally.
+
+### Constraint syntax, `directory()` outputs and absolute paths
+
+Three classes of input used to produce *silent* false orphans and are now pinned:
+brace-quantified constraints (`{chrom,[0-9]{1,2}}`, at inline, rule and global
+level — `test_cli_scan_brace_quantifier_constraint_is_live`), files inside a
+`directory()` output including `.snakemake_timestamp`
+(`test_cli_scan_files_inside_directory_output_are_live`), and outputs built from
+an absolute path under the project (`test_cli_scan_absolute_output_under_project_is_live`).
+Anything brace-shaped the parser cannot read now raises instead of being
+escaped into a never-matching literal (`test_unparseable_brace_raises_pattern_error`,
+`test_cli_scan_unparseable_pattern_exits_4`). The unused `walker.find_orphans`
+entry point was removed, along with its 5 tests.
 
 ## Part 2 — Layered refusals in front of every deletion
 
@@ -163,6 +176,17 @@ genuinely mean it.
    meant to prevent. Like the deletion guards, this collision check runs in the
    all-or-nothing pre-flight pass, so one colliding orphan aborts the whole batch
    before anything has moved.
+
+11. **`--trash` cannot point into the results tree.** A trash directory equal to,
+   or beneath, the scanned results directory is refused (exit 3), since the next
+   scan would report the trashed files as orphans
+   (`test_cli_scan_trash_inside_results_dir_refuses`,
+   `test_cli_scan_trash_equal_to_results_dir_refuses`).
+
+12. **Partial deletion is reported honestly.** If a batch fails part-way,
+   snakeprune stops, reports how many files were removed, and exits 5
+   (`test_delete_orphans_mid_batch_failure_reports_progress`,
+   `test_cli_scan_delete_partial_failure_exits_5_with_count`).
 
 ## The headline data-loss invariants
 
