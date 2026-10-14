@@ -81,7 +81,7 @@ def test_cli_scan_emits_progress_by_default(make_pipeline, make_results):
     assert result.exit_code == 0
     combined = result.stdout + (result.stderr or "")
     assert "Loading Snakemake workflow" in combined
-    assert "Loaded" in combined and "rule output pattern" in combined
+    assert "Loaded" in combined and "rule path pattern" in combined
     assert "Walking" in combined
     assert "Scanned" in combined and "orphan" in combined
 
@@ -129,7 +129,7 @@ def test_cli_scan_refuses_when_workflow_has_no_rules(tmp_path):
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 3
     combined = result.stdout + (result.stderr or "")
-    assert "0 output patterns" in combined
+    assert "0 path patterns" in combined
     assert "--allow-empty-rules" in combined
 
 

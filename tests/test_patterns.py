@@ -688,3 +688,56 @@ def test_find_rule_patterns_drops_absolute_patterns_with_warning(make_pipeline):
     assert len(warnings) == 1
     assert "/nowhere/elsewhere/{n}.txt" in warnings[0]
     assert "rule `a`" in warnings[0]
+
+
+def test_run_extractor_includes_named_log_entries(make_pipeline):
+    # log: can carry several named entries; every one is rule-produced.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        "    log:\n"
+        "        out = 'logs/{sample}.out',\n"
+        "        err = 'logs/{sample}.err'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert "logs/{sample}.out" in specs[0].outputs
+    assert "logs/{sample}.err" in specs[0].outputs
+
+
+def test_run_extractor_includes_repeat_flagged_benchmark(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        "    benchmark: repeat('benchmarks/{sample}.tsv', 3)\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert "benchmarks/{sample}.tsv" in specs[0].outputs
+
+
+def test_run_extractor_dedups_log_equal_to_output(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        "    log: 'results/{sample}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert specs[0].outputs == ["results/{sample}.txt"]
+
+
+@pytest.mark.parametrize("directive", ["log", "benchmark"])
+def test_run_extractor_callable_log_or_benchmark_fails_loudly(make_pipeline, directive):
+    # Snakemake 9.x happens to reject callable log/benchmark during rule
+    # registration, so the extractor's own guard is currently unreachable; the
+    # contract pinned here is only "ExtractorError, never a pattern". Do not
+    # assert on the message text.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}.txt'\n"
+        f"    {directive}: lambda w: 'x/{{sample}}.log'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    with pytest.raises(ExtractorError):
+        run_extractor(pipeline)

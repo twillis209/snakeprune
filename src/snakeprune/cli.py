@@ -177,10 +177,10 @@ def scan(
     except (ExtractorError, PatternError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=4)
-    log(f"Loaded {len(patterns)} rule output pattern(s).")
+    log(f"Loaded {len(patterns)} rule path pattern(s) (output, log, benchmark).")
     if not patterns and not allow_empty_rules:
         typer.echo(
-            "Workflow loaded but produced 0 output patterns. Refusing to "
+            "Workflow loaded but produced 0 path patterns. Refusing to "
             "scan: every file would be reported as an orphan. Check that "
             "the right config / env is loaded, or pass --allow-empty-rules "
             "to override.",

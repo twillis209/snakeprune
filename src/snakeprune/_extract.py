@@ -78,7 +78,7 @@ def _relativise(path: str, workdir: Path) -> str:
 
 def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> dict:
     from snakemake.api import SnakemakeApi
-    from snakemake.io import is_flagged
+    from snakemake.io import is_callable, is_flagged
     from snakemake.settings.enums import Quietness
     from snakemake.settings.types import (
         ConfigSettings,
@@ -106,6 +106,12 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
             produced = list(rule.output) + list(rule.log)
             if rule.benchmark:
                 produced.append(rule.benchmark)
+            for o in produced:
+                if callable(o) or is_callable(o):
+                    raise ValueError(
+                        f"rule {rule.name}: an output/log/benchmark path is a "
+                        f"function; snakeprune cannot derive a pattern from it"
+                    )
             raw_outputs = list(dict.fromkeys(_relativise(str(o), workdir) for o in produced))
             directories = [
                 _relativise(str(o), workdir)
