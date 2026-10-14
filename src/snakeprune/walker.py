@@ -109,11 +109,7 @@ def iter_results_files(
 from dataclasses import dataclass
 import re
 
-from snakeprune.patterns import (
-    combine_rule_patterns,
-    extract_literal_prefix,
-    find_rule_patterns,
-)
+from snakeprune.patterns import extract_literal_prefix
 
 
 @dataclass(frozen=True)
@@ -136,25 +132,3 @@ def attribute_orphan_to_rule(target: str, patterns: list[tuple[str, re.Pattern]]
             best_rule = name
     return best_rule
 
-
-def find_orphans(
-    pipeline_dir: Path,
-    results_dir: Path,
-    ignore_globs: Iterable[str] = (),
-    follow_symlinks: bool = False,
-    attribute_rules: bool = False,
-) -> list[OrphanFile]:
-    """Return regular files under `results_dir` that match no rule output pattern."""
-    patterns = find_rule_patterns(pipeline_dir)
-    combined = combine_rule_patterns(patterns)
-    orphans: list[OrphanFile] = []
-    target_prefix = results_dir.name + "/"
-    for full_path, rel in iter_results_files(
-        results_dir, ignore_globs=ignore_globs, follow_symlinks=follow_symlinks
-    ):
-        match_target = target_prefix + rel
-        if combined is not None and combined.match(match_target):
-            continue
-        likely = attribute_orphan_to_rule(match_target, patterns) if attribute_rules else None
-        orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
-    return orphans

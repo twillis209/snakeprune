@@ -44,57 +44,6 @@ def test_iter_results_files_directories_not_returned(make_results):
         assert os.path.isfile(full_path)
 
 
-from snakeprune.walker import find_orphans, OrphanFile
-
-
-def test_find_orphans_distinguishes_live_and_orphan(make_pipeline, make_results):
-    pipeline = make_pipeline(
-        "rule a:\n"
-        "    output: 'results/{n}.txt'\n"
-        "    shell: 'touch {output}'\n"
-    )
-    results = make_results(["1.txt", "2.txt", "obsolete/3.txt"])
-    orphans = find_orphans(pipeline, results)
-    rel = sorted(o.path.relative_to(results).as_posix() for o in orphans)
-    assert rel == ["obsolete/3.txt"]
-
-
-def test_find_orphans_empty_results(make_pipeline, make_results):
-    pipeline = make_pipeline(
-        "rule a:\n"
-        "    output: 'results/{n}.txt'\n"
-        "    shell: 'touch {output}'\n"
-    )
-    results = make_results([])
-    assert find_orphans(pipeline, results) == []
-
-
-def test_find_orphans_ignore_globs_excluded_from_orphan_set(make_pipeline, make_results):
-    pipeline = make_pipeline(
-        "rule a:\n"
-        "    output: 'results/{n}.txt'\n"
-        "    shell: 'touch {output}'\n"
-    )
-    results = make_results(["1.txt", "notes/manual.md"])
-    orphans = find_orphans(pipeline, results, ignore_globs=["notes/**"])
-    assert orphans == []
-
-
-def test_find_orphans_with_attribution_guesses_closest_rule(make_pipeline, make_results):
-    # Rule pattern uses two wildcards; orphan file has the right directory structure
-    # but extra path components — should still be attributed to this rule as the
-    # closest match by directory prefix.
-    pipeline = make_pipeline(
-        "rule egene_model:\n"
-        "    output: 'results/exp_models/{panel}/{ensid}.csv'\n"
-        "    shell: 'touch {output}'\n"
-    )
-    results = make_results(["exp_models/1kGP/extra_subdir/ENSG001.csv"])
-    orphans = find_orphans(pipeline, results, attribute_rules=True)
-    assert len(orphans) == 1
-    assert orphans[0].likely_rule == "egene_model"
-
-
 def test_iter_results_files_exclude_dirs_prunes_subtree(make_results):
     results = make_results(["keep/a.txt", "sub/b.txt"])
     exclude = os.path.abspath(results / "keep")
@@ -149,14 +98,3 @@ def test_iter_results_files_stats_omitted_does_not_error(make_results, tmp_path)
     rels = [rel for _, rel in iter_results_files(results)]
     assert rels == ["a.txt"]
 
-
-def test_find_orphans_sets_rel_on_orphan_file(make_pipeline, make_results):
-    pipeline = make_pipeline(
-        "rule a:\n"
-        "    output: 'results/{n}.txt'\n"
-        "    shell: 'touch {output}'\n"
-    )
-    results = make_results(["obsolete/3.txt"])
-    orphans = find_orphans(pipeline, results)
-    assert len(orphans) == 1
-    assert orphans[0].rel == "obsolete/3.txt"
