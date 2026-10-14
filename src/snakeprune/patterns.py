@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 # Mirrors snakemake.io.WILDCARD_REGEX: a wildcard name, optionally followed by
 # a comma and a constraint regex whose body may contain one level of nested
@@ -229,6 +229,7 @@ def find_rule_patterns(
     pipeline_dir: Path,
     configfiles: Sequence[Path] = (),
     default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
+    on_warning: Callable[[str], None] | None = None,
 ) -> list[tuple[str, re.Pattern]]:
     """Top-level: return one (rule_name, compiled_regex) per produced path.
 
@@ -236,6 +237,11 @@ def find_rule_patterns(
     per output file pattern. `default_wildcard_regex` is the body used for
     wildcards with no constraint at all (default `[^/]+`; pass
     `SNAKEMAKE_WILDCARD_REGEX` for Snakemake's own `.+`).
+
+    Absolute paths that the extractor could not relativise against the workdir
+    can never match `<results-dir-name>/<rel>`; they are skipped and reported
+    through `on_warning` (if given) so the user knows the live set is narrower
+    than the workflow.
     """
     # Pre-check: surface SnakefileNotFound before spawning the extractor
     # subprocess, so a missing Snakefile exits 2 (not 4 via ExtractorError).
@@ -243,6 +249,16 @@ def find_rule_patterns(
     out: list[tuple[str, re.Pattern]] = []
     for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
         for output_str in spec.outputs:
+            if output_str.startswith("/"):
+                if on_warning is not None:
+                    on_warning(
+                        f"WARNING: dropping absolute path `{output_str}` from "
+                        f"rule `{spec.name}`: it lies outside the workflow "
+                        f"directory and can never match a scanned file. Files "
+                        f"it produces under the results dir would be reported "
+                        f"as orphans."
+                    )
+                continue
             regex_str = wildcard_pattern_to_regex(
                 output_str,
                 spec.constraints,

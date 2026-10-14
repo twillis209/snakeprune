@@ -897,3 +897,51 @@ def test_cli_scan_permissive_wildcards_matches_slash_in_wildcard(make_pipeline, 
     )
     assert permissive.exit_code == 0, permissive.output
     assert "flat.txt" not in permissive.stdout
+
+
+def test_cli_scan_absolute_output_under_project_is_live(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "import os\n"
+        "OUT = os.path.abspath('results')\n"
+        "rule a:\n"
+        "    output: OUT + '/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "orphan.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "orphan.csv" in result.stdout
+    assert "1.txt" not in result.stdout
+
+
+def test_cli_scan_foreign_absolute_output_warns_even_when_quiet(make_pipeline, make_results):
+    # Dropping a pattern narrows the live set, which is safety-relevant, so the
+    # warning is not subject to --quiet.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '/nowhere/elsewhere/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--quiet"])
+    assert result.exit_code == 0, result.output
+    assert "/nowhere/elsewhere/{n}.txt" in result.output
+    assert "WARNING" in result.output
+
+
+def test_cli_scan_all_rules_foreign_absolute_hits_empty_rule_refusal(make_pipeline, make_results):
+    # After dropping every absolute pattern nothing is left; the existing
+    # empty-rule refusal (exit 3) must fire rather than scanning with no
+    # patterns and reporting every file as an orphan.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '/nowhere/elsewhere/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 3
+    assert "Refusing to scan" in result.output

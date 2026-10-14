@@ -57,6 +57,25 @@ def _resolve_workdir(snakefile: Path) -> Path:
     return parent
 
 
+def _relativise(path: str, workdir: Path) -> str:
+    """Strip the workdir prefix from an absolute path that lies under it.
+
+    Both the plain and the symlink-resolved form of the workdir are tried,
+    because a Snakefile that calls `os.path.abspath` yields whichever form the
+    subprocess's cwd happens to have. Absolute paths elsewhere are returned
+    unchanged; `patterns.py` drops them with a warning.
+    """
+    import os
+
+    if not os.path.isabs(path):
+        return path
+    for base in {os.path.abspath(workdir), str(Path(workdir).resolve())}:
+        prefix = base.rstrip(os.sep) + os.sep
+        if path.startswith(prefix):
+            return path[len(prefix):]
+    return path
+
+
 def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> dict:
     from snakemake.api import SnakemakeApi
     from snakemake.io import is_flagged
@@ -87,8 +106,12 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
             produced = list(rule.output) + list(rule.log)
             if rule.benchmark:
                 produced.append(rule.benchmark)
-            raw_outputs = list(dict.fromkeys(str(o) for o in produced))
-            directories = [str(o) for o in rule.output if is_flagged(o, "directory")]
+            raw_outputs = list(dict.fromkeys(_relativise(str(o), workdir) for o in produced))
+            directories = [
+                _relativise(str(o), workdir)
+                for o in rule.output
+                if is_flagged(o, "directory")
+            ]
             rule_constraints = dict(
                 getattr(rule, "wildcard_constraints", {}) or {}
             )

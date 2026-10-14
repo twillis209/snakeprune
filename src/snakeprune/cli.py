@@ -156,6 +156,7 @@ def scan(
             default_wildcard_regex=(
                 SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
             ),
+            on_warning=lambda msg: typer.echo(msg, err=True),
         )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)

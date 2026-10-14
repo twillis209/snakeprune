@@ -645,3 +645,46 @@ def test_run_extractor_callable_output_fails_loudly(make_pipeline):
     msg = str(exc.value)
     assert "Extractor failed" in msg
     assert "function" in msg.lower()
+
+
+def test_run_extractor_relativises_absolute_paths_under_workdir(make_pipeline):
+    # A rule that builds its output from an absolute path (typical with
+    # config['outdir'] = os.path.abspath(...)) still writes under the project.
+    # The extractor must emit it workdir-relative so it can match
+    # `results/<rel>`; otherwise every file of that rule is an orphan.
+    pipeline = make_pipeline(
+        "import os\n"
+        "OUT = os.path.abspath('results')\n"
+        "rule a:\n"
+        "    output: OUT + '/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert specs[0].outputs == ["results/{n}.txt"]
+
+
+def test_run_extractor_leaves_foreign_absolute_paths_absolute(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '/nowhere/elsewhere/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert specs[0].outputs == ["/nowhere/elsewhere/{n}.txt"]
+
+
+def test_find_rule_patterns_drops_absolute_patterns_with_warning(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '/nowhere/elsewhere/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    warnings: list[str] = []
+    patterns = find_rule_patterns(pipeline, on_warning=warnings.append)
+    assert [name for name, _ in patterns] == ["b"]
+    assert len(warnings) == 1
+    assert "/nowhere/elsewhere/{n}.txt" in warnings[0]
+    assert "rule `a`" in warnings[0]
