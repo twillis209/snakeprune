@@ -130,6 +130,19 @@ def scan(
         )
         raise typer.Exit(code=3)
 
+    if trash is not None:
+        results_abs = os.path.abspath(results_dir)
+        trash_abs = os.path.abspath(trash)
+        if trash_abs == results_abs or trash_abs.startswith(results_abs + os.sep):
+            typer.echo(
+                "Refusing to delete: --trash must not be inside the results "
+                "directory being scanned. The next scan would report the "
+                "trashed files as orphans and --delete would unlink the only "
+                "copy. Choose a trash directory outside the results tree.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+
     naughty = DEFAULT_NAUGHTY_DIRS | set(naughty_dir or ())
     if results_dir.name in naughty:
         typer.echo(

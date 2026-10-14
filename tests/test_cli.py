@@ -977,3 +977,58 @@ def test_cli_scan_delete_partial_failure_exits_5_with_count(
     assert "Deleted 1 of 3" in result.output
     assert "Refusing" not in result.output
     assert (results / "1.txt").exists()
+
+
+def test_cli_scan_trash_inside_results_dir_refuses(make_pipeline, make_results):
+    # Trashing into the scanned tree means the next scan reports the trash as
+    # orphans and --delete would then unlink the only copy.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["orphan.csv"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--trash", str(results / ".trash"), "--yes"],
+    )
+    assert result.exit_code == 3
+    assert "Refusing" in result.output
+    assert "--trash" in result.output
+    assert (results / "orphan.csv").exists()
+
+
+def test_cli_scan_trash_equal_to_results_dir_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["orphan.csv"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--trash", str(results), "--yes"]
+    )
+    assert result.exit_code == 3
+    assert (results / "orphan.csv").exists()
+
+
+def test_cli_scan_trash_as_ancestor_of_results_dir_collides_and_refuses(
+    make_pipeline, make_results, tmp_path
+):
+    # --trash pointing at the *parent* of results_dir makes the trash target
+    # `<parent>/results/<rel>` == the source file. The existing collision guard
+    # refuses before anything moves. Pinned so a future refactor of the guard
+    # cannot silently allow a self-move.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["orphan.csv"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--trash", str(tmp_path), "--yes", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 3
+    assert "already exists" in result.output
+    assert (results / "orphan.csv").exists()
