@@ -136,6 +136,17 @@ def test_unparseable_brace_raises_pattern_error():
         wildcard_pattern_to_regex("results/{x,[a-z]{3,}}}.txt", constraints={})
 
 
+def test_unclosed_brace_fails_fast():
+    # An unclosed brace must raise promptly: the parser's constraint group
+    # must not backtrack exponentially (a hang would mask the loud failure).
+    import time
+    from snakeprune.patterns import PatternError
+    start = time.monotonic()
+    with pytest.raises(PatternError):
+        wildcard_pattern_to_regex("r/{x," + "a" * 40 + " {", constraints={})
+    assert time.monotonic() - start < 1.0
+
+
 from snakeprune.patterns import resolve_snakefile, SnakefileNotFound
 
 

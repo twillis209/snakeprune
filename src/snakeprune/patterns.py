@@ -10,10 +10,12 @@ from typing import Sequence
 
 # Mirrors snakemake.io.WILDCARD_REGEX: a wildcard name, optionally followed by
 # a comma and a constraint regex whose body may contain one level of nested
-# `{n}` / `{n,m}` quantifier braces (e.g. `{chrom,[0-9]{1,2}}`).
+# `{n}` / `{n,m}` quantifier braces (e.g. `{chrom,[0-9]{1,2}}`). Possessive
+# quantifiers (Python >= 3.11) keep malformed input from backtracking
+# exponentially.
 _WILDCARD_RE = re.compile(
     r"\{\s*(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
-    r"(?:\s*,\s*(?P<constraint>(?:[^{}]+|\{\d+(?:,\d+)?\})*))?\s*\}"
+    r"(?:\s*,\s*(?P<constraint>(?:[^{}]++|\{\d+(?:,\d+)?\})*+))?\s*\}"
 )
 
 DEFAULT_WILDCARD_REGEX = r"[^/]+"
