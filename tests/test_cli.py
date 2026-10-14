@@ -1006,9 +1006,11 @@ def test_cli_scan_trash_equal_to_results_dir_refuses(make_pipeline, make_results
     )
     results = make_results(["orphan.csv"])
     result = runner.invoke(
-        app, ["scan", str(pipeline), str(results), "--trash", str(results), "--yes"]
+        app,
+        ["scan", str(pipeline), str(results), "--trash", str(results), "--yes", "--allow-high-orphan-rate"],
     )
     assert result.exit_code == 3
+    assert "--trash" in result.output
     assert (results / "orphan.csv").exists()
 
 
