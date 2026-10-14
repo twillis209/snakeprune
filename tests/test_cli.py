@@ -793,3 +793,56 @@ def test_cli_scan_delete_is_idempotent_on_rerun(make_pipeline, make_results):
     assert (results / "1.txt").exists()
     combined = second.stdout + (second.stderr or "")
     assert "found 0 orphan" in combined.lower()
+
+
+def test_cli_scan_brace_quantifier_constraint_is_live(make_pipeline, make_results):
+    # Snakemake inlines global and rule-level wildcard_constraints into every
+    # output string as `{name,regex}`. A regex with a brace quantifier such as
+    # `[0-9]{1,2}` (chromosomes!) must be parsed, not escaped into a literal
+    # that matches nothing — otherwise every file of the rule is an orphan and
+    # --delete would remove live outputs.
+    pipeline = make_pipeline(
+        "wildcard_constraints:\n"
+        "    chrom = '[0-9]{1,2}'\n"
+        "\n"
+        "rule a:\n"
+        "    output: 'results/{chrom}.g.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "\n"
+        "rule b:\n"
+        "    wildcard_constraints: sample = '[0-9]{2}'\n"
+        "    output: 'results/{sample}.r.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "\n"
+        "rule c:\n"
+        "    output: 'results/{sample,[a-z]{3}}.i.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["7.g.txt", "12.r.txt", "abc.i.txt", "orphan.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "orphan.csv" in result.stdout
+    assert "7.g.txt" not in result.stdout
+    assert "12.r.txt" not in result.stdout
+    assert "abc.i.txt" not in result.stdout
+
+
+def test_cli_scan_unparseable_pattern_exits_4(make_pipeline, make_results, monkeypatch):
+    # If the extractor ever hands back a brace sequence the parser does not
+    # understand, the scan must stop with exit 4 — never escape it into a
+    # literal that flags every file of the rule as an orphan.
+    from snakeprune.patterns import RuleSpec
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    monkeypatch.setattr(
+        "snakeprune.patterns.load_rule_specs",
+        lambda *a, **k: [RuleSpec(name="a", outputs=["results/{bad name}.txt"], constraints={})],
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4
+    assert "Cannot parse wildcard syntax" in result.output
+    assert "1.txt" not in result.stdout

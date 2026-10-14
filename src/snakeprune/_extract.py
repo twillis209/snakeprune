@@ -3,12 +3,20 @@
 This script is invoked as a subprocess by snakeprune's CLI:
     python _extract.py <pipeline_dir> [--configfile PATH ...]
 
-It loads the Snakemake workflow at <pipeline_dir>, iterates over each rule's
-declared outputs, strips Snakemake's inline `{name,regex}` constraint
-annotations, merges effective wildcard constraints, and emits the result
-as a JSON document on stdout:
+It loads the Snakemake workflow at <pipeline_dir>, iterates over each path a
+rule produces (output, log, benchmark), and emits the result as a JSON document
+on stdout:
 
-    {"rules": [{"name": str, "outputs": list[str], "constraints": dict[str, str]}, ...]}
+    {"rules": [{"name": str,
+                "outputs": list[str],       # raw path strings, inline {name,regex} kept
+                "directories": list[str],   # subset of outputs flagged directory()
+                "constraints": dict[str, str]}, ...]}
+
+Paths are emitted exactly as Snakemake stores them: Snakemake has already
+inlined rule-level and global wildcard_constraints into each string as
+`{name,regex}`. `constraints` (rule-local merged over global) is kept only as
+a fallback for wildcards that carry no inline annotation. All brace parsing
+happens in snakeprune's patterns.py — deliberately in one place.
 
 Errors go to stderr; the script exits nonzero on any failure.
 
@@ -19,25 +27,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
-
-
-_INLINE_CONSTRAINT_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*),[^{}]*\}")
-
-
-def _strip_inline_constraints(pattern: str) -> tuple[str, dict[str, str]]:
-    constraints: dict[str, str] = {}
-
-    def _record(match: re.Match[str]) -> str:
-        name = match.group(1)
-        body = match.group(0)[len(name) + 2 : -1]
-        constraints[name] = body
-        return "{" + name + "}"
-
-    stripped = _INLINE_CONSTRAINT_RE.sub(_record, pattern)
-    return stripped, constraints
 
 
 def _resolve_snakefile(pipeline_dir: Path) -> Path:
@@ -92,29 +83,19 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
         )
         rules_out: list[dict] = []
         for rule in workflow.rules:
-            raw_outputs: list[str] = []
-            inline_constraints: dict[str, str] = {}
             produced = list(rule.output) + list(rule.log)
-            benchmark = getattr(rule, "benchmark", None)
-            if benchmark:
-                produced.append(benchmark)
-            for o in produced:
-                stripped, inline = _strip_inline_constraints(str(o))
-                raw_outputs.append(stripped)
-                inline_constraints.update(inline)
+            if rule.benchmark:
+                produced.append(rule.benchmark)
+            raw_outputs = list(dict.fromkeys(str(o) for o in produced))
             rule_constraints = dict(
                 getattr(rule, "wildcard_constraints", {}) or {}
             )
-            effective = {
-                **global_constraints,
-                **inline_constraints,
-                **rule_constraints,
-            }
             rules_out.append(
                 {
                     "name": rule.name,
                     "outputs": raw_outputs,
-                    "constraints": effective,
+                    "directories": [],
+                    "constraints": {**global_constraints, **rule_constraints},
                 }
             )
         return {"rules": rules_out}

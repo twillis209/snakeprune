@@ -8,36 +8,76 @@ import subprocess
 from pathlib import Path
 from typing import Sequence
 
-_WILDCARD_RE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
+# Mirrors snakemake.io.WILDCARD_REGEX: a wildcard name, optionally followed by
+# a comma and a constraint regex whose body may contain one level of nested
+# `{n}` / `{n,m}` quantifier braces (e.g. `{chrom,[0-9]{1,2}}`).
+_WILDCARD_RE = re.compile(
+    r"\{\s*(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
+    r"(?:\s*,\s*(?P<constraint>(?:[^{}]+|\{\d+(?:,\d+)?\})*))?\s*\}"
+)
+
+DEFAULT_WILDCARD_REGEX = r"[^/]+"
+SNAKEMAKE_WILDCARD_REGEX = r".+"
 
 
-def wildcard_pattern_to_regex(pattern: str, constraints: dict[str, str]) -> str:
-    """Convert a Snakemake output pattern to an anchored regex string.
+class PatternError(ValueError):
+    """Raised when a rule path contains brace syntax the parser cannot read.
 
-    Each {wildcard} placeholder on its first occurrence is replaced with a named
-    capture group whose body is taken from `constraints[wildcard]` if present,
-    else the default `[^/]+` (matching Snakemake's own default). Subsequent
-    occurrences of the same wildcard in the pattern become backreferences
-    (?P=name), preserving Snakemake's implicit-equality semantics for repeated
-    wildcards. All other characters in the pattern are escaped for literal regex
-    matching.
+    Failing loudly here is a safety property: an unparsed `{...}` escaped into
+    a literal would match nothing, silently turning every file of that rule
+    into an orphan.
+    """
+
+
+def wildcard_pattern_to_regex(
+    pattern: str,
+    constraints: dict[str, str],
+    default: str = DEFAULT_WILDCARD_REGEX,
+    is_directory: bool = False,
+) -> str:
+    """Convert a Snakemake path pattern to an anchored regex string.
+
+    Each `{wildcard}` or `{wildcard,regex}` placeholder on its first occurrence
+    becomes a named capture group. The group body is, in order of precedence:
+    the inline `regex` annotation, `constraints[wildcard]`, then `default`.
+    This matches Snakemake (inline > rule-local > global). Subsequent
+    occurrences of the same wildcard become backreferences `(?P=name)`,
+    preserving Snakemake's implicit-equality semantics. All other characters
+    are escaped for literal matching.
+
+    `is_directory=True` appends `(?:/.*)?` so that files *inside* a
+    `directory()` output are matched as live.
+
+    Raises `PatternError` if any `{` or `}` survives in a literal segment.
     """
     parts: list[str] = []
     cursor = 0
     seen: set[str] = set()
+
+    def _literal(text: str) -> str:
+        if "{" in text or "}" in text:
+            raise PatternError(
+                f"Cannot parse wildcard syntax in rule path `{pattern}` "
+                f"(unexpected brace in `{text}`). snakeprune refuses to "
+                f"guess: an unparsed pattern would mark every file of this "
+                f"rule as an orphan."
+            )
+        return re.escape(text)
+
     for match in _WILDCARD_RE.finditer(pattern):
-        literal = pattern[cursor : match.start()]
-        parts.append(re.escape(literal))
-        name = match.group(1)
+        parts.append(_literal(pattern[cursor : match.start()]))
+        name = match.group("name")
         if name in seen:
             parts.append(f"(?P={name})")
         else:
-            body = constraints.get(name, r"[^/]+")
+            inline = match.group("constraint")
+            body = inline if inline else constraints.get(name, default)
             parts.append(f"(?P<{name}>{body})")
             seen.add(name)
         cursor = match.end()
-    parts.append(re.escape(pattern[cursor:]))
-    return "^" + "".join(parts) + "$"
+    parts.append(_literal(pattern[cursor:]))
+    suffix = r"(?:/.*)?" if is_directory else ""
+    return "^" + "".join(parts) + suffix + "$"
 
 
 class SnakefileNotFound(FileNotFoundError):
@@ -62,24 +102,26 @@ def resolve_snakefile(pipeline_dir: Path) -> Path:
     )
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class RuleSpec:
-    """Raw rule output information extracted from a loaded workflow.
+    """Raw rule path information extracted from a loaded workflow.
 
     Fields:
         name: the rule name as declared in the Snakefile.
-        outputs: raw output pattern strings (e.g. ``"results/{x}.txt"``) with any
-            inline ``{name,regex}`` constraint annotations stripped — the regex
-            constraint, if any, is reported separately via ``constraints``.
-        constraints: effective wildcard constraints (rule-local merged over
-            workflow-global). Keys are wildcard names, values are regex bodies.
+        outputs: raw path strings for everything the rule produces (``output``,
+            ``log`` and ``benchmark``), exactly as Snakemake stores them —
+            inline ``{name,regex}`` constraint annotations are preserved.
+        constraints: fallback wildcard constraints (rule-local merged over
+            workflow-global) for wildcards with no inline annotation.
+        directories: the subset of ``outputs`` declared with ``directory()``.
     """
     name: str
     outputs: list[str]
     constraints: dict[str, str]
+    directories: list[str] = field(default_factory=list)
 
 
 class ExtractorError(RuntimeError):
@@ -175,6 +217,7 @@ def run_extractor(
             name=r["name"],
             outputs=list(r["outputs"]),
             constraints=dict(r["constraints"]),
+            directories=list(r.get("directories", [])),
         )
         for r in payload["rules"]
     ]
@@ -184,7 +227,7 @@ def find_rule_patterns(
     pipeline_dir: Path,
     configfiles: Sequence[Path] = (),
 ) -> list[tuple[str, re.Pattern]]:
-    """Top-level: return one (rule_name, compiled_regex) per output pattern.
+    """Top-level: return one (rule_name, compiled_regex) per produced path.
 
     Rules with multiple outputs (e.g., multiext) contribute multiple entries, one
     per output file pattern.
@@ -195,7 +238,11 @@ def find_rule_patterns(
     out: list[tuple[str, re.Pattern]] = []
     for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
         for output_str in spec.outputs:
-            regex_str = wildcard_pattern_to_regex(output_str, spec.constraints)
+            regex_str = wildcard_pattern_to_regex(
+                output_str,
+                spec.constraints,
+                is_directory=output_str in spec.directories,
+            )
             out.append((spec.name, re.compile(regex_str)))
     return out
 

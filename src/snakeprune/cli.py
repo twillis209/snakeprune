@@ -11,6 +11,7 @@ import typer
 from snakeprune.delete import delete_orphans
 from snakeprune.patterns import (
     ExtractorError,
+    PatternError,
     SnakefileNotFound,
     combine_rule_patterns,
     extract_literal_prefix,
@@ -146,7 +147,7 @@ def scan(
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
-    except ExtractorError as exc:
+    except (ExtractorError, PatternError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=4)
     log(f"Loaded {len(patterns)} rule output pattern(s).")

@@ -1,4 +1,6 @@
 # tests/test_patterns.py
+import pytest
+
 def test_make_pipeline_writes_snakefile(make_pipeline):
     pipeline = make_pipeline("rule all:\n    input: 'results/x.txt'\n")
     assert (pipeline / "Snakefile").read_text().startswith("rule all:")
@@ -75,7 +77,65 @@ def test_repeated_wildcard_with_constraint_uses_backreference():
     assert not pat.match("abc/abc.csv")
 
 
-import pytest
+def test_inline_constraint_is_parsed_from_pattern():
+    # Snakemake-style `{name,regex}` annotations are parsed by patterns.py
+    # itself; the extractor no longer strips them.
+    regex = wildcard_pattern_to_regex("results/{x,[0-9]+}.txt", constraints={})
+    assert regex == r"^results/(?P<x>[0-9]+)\.txt$"
+
+
+def test_inline_constraint_with_brace_quantifier():
+    # The constraint body may contain one level of `{n}` / `{n,m}` quantifier
+    # braces, exactly as Snakemake's WILDCARD_REGEX allows.
+    regex = wildcard_pattern_to_regex("results/{chrom,[0-9]{1,2}}.txt", constraints={})
+    assert regex == r"^results/(?P<chrom>[0-9]{1,2})\.txt$"
+    regex = wildcard_pattern_to_regex("results/{s,[a-z]{3}}.txt", constraints={})
+    assert regex == r"^results/(?P<s>[a-z]{3})\.txt$"
+
+
+def test_wildcard_regex_constraint_with_comma_in_class():
+    # A comma inside a character class must not be mistaken for the
+    # name/constraint separator; only the first comma after the name is.
+    regex_str = wildcard_pattern_to_regex("{s,[a-z,]{1,3}}.txt", constraints={})
+    pat = _re_module.compile(regex_str)
+    assert pat.match("a,b.txt")
+    assert not pat.match("abcd.txt")
+
+
+def test_inline_constraint_beats_constraints_dict():
+    # Snakemake precedence: inline annotation > rule-local > global. The
+    # `constraints` dict (rule-local merged over global) is only a fallback for
+    # wildcards that carry no inline annotation.
+    regex = wildcard_pattern_to_regex(
+        "{x,[0-9]+}/{y}.txt", constraints={"x": "[ab]+", "y": r"\d+"}
+    )
+    assert regex == r"^(?P<x>[0-9]+)/(?P<y>\d+)\.txt$"
+
+
+def test_dict_constraint_with_brace_quantifier():
+    regex = wildcard_pattern_to_regex("{n}.txt", constraints={"n": "[0-9]{2}"})
+    assert regex == r"^(?P<n>[0-9]{2})\.txt$"
+
+
+def test_default_wildcard_regex_is_overridable():
+    regex = wildcard_pattern_to_regex("results/{n}.txt", constraints={}, default=".+")
+    assert regex == r"^results/(?P<n>.+)\.txt$"
+
+
+def test_unparseable_brace_raises_pattern_error():
+    # Defence in depth: anything brace-shaped that the parser does not
+    # recognise must raise, never be escaped into a literal that silently
+    # matches nothing (which would turn every file of the rule into an orphan).
+    from snakeprune.patterns import PatternError
+    with pytest.raises(PatternError) as exc:
+        wildcard_pattern_to_regex("results/{bad name}.txt", constraints={})
+    assert "results/{bad name}.txt" in str(exc.value)
+    with pytest.raises(PatternError):
+        wildcard_pattern_to_regex("results/{x}}.txt", constraints={})
+    with pytest.raises(PatternError):
+        wildcard_pattern_to_regex("results/{x,[a-z]{3,}}}.txt", constraints={})
+
+
 from snakeprune.patterns import resolve_snakefile, SnakefileNotFound
 
 
@@ -101,7 +161,7 @@ def test_resolve_snakefile_missing_raises(tmp_path):
     assert str(pipeline / "workflow" / "Snakefile") in msg
 
 
-from snakeprune.patterns import load_rule_specs, RuleSpec
+from snakeprune.patterns import load_rule_specs, find_rule_patterns, RuleSpec
 
 
 def test_load_rule_specs_single_rule(make_pipeline):
@@ -129,18 +189,21 @@ def test_load_rule_specs_global_constraints_visible(make_pipeline):
     assert specs[0].constraints.get("x") == "[0-9]+"
 
 
-def test_load_rule_specs_inline_constraint_captured(make_pipeline):
+def test_load_rule_specs_inline_constraint_preserved_raw(make_pipeline):
+    # The extractor emits the path exactly as Snakemake stores it; parsing the
+    # `{name,regex}` annotation is patterns.py's job (single parser).
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{x,[0-9]+}.txt'\n"
         "    shell: 'touch {output}'\n"
     )
     specs = load_rule_specs(pipeline)
-    assert specs[0].outputs == ["results/{x}.txt"]
-    assert specs[0].constraints.get("x") == "[0-9]+"
+    assert specs[0].outputs == ["results/{x,[0-9]+}.txt"]
 
-
-def test_load_rule_specs_inline_constraint_overridden_by_rule_local(make_pipeline):
+def test_find_rule_patterns_inline_constraint_wins_over_rule_local(make_pipeline):
+    # Snakemake precedence: an inline `{x,regex}` annotation beats the rule's
+    # wildcard_constraints block. snakeprune must agree, or it would accept a
+    # different set of files than Snakemake would produce.
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{x,[0-9]+}.txt'\n"
@@ -148,10 +211,9 @@ def test_load_rule_specs_inline_constraint_overridden_by_rule_local(make_pipelin
         "        x = r'[ab]+'\n"
         "    shell: 'touch {output}'\n"
     )
-    specs = load_rule_specs(pipeline)
-    # Rule-local declared constraint wins over inline annotation
-    assert specs[0].constraints.get("x") == "[ab]+"
-
+    (_, regex), = find_rule_patterns(pipeline)
+    assert regex.match("results/123.txt")
+    assert not regex.match("results/ab.txt")
 
 def test_load_rule_specs_multiple_rules(make_pipeline):
     pipeline = make_pipeline(
@@ -192,8 +254,12 @@ def test_load_rule_specs_module_imported_rules_visible(make_pipeline):
 def test_load_rule_specs_module_with_prefix_applied(make_pipeline):
     """`module foo: prefix: 'subdir/'` prepends a path to the imported rule's
     inputs and outputs. snakeprune must see the *prefixed* pattern, otherwise
-    every file under `subdir/results/` would look like an orphan."""
+    every file under `subdir/results/` would look like an orphan. The inlined
+    constraint must survive the prefixing too."""
     pipeline = make_pipeline(
+        "wildcard_constraints:\n"
+        "    n = '[0-9]{2}'\n"
+        "\n"
         "module foo:\n"
         "    snakefile: 'foo.smk'\n"
         "    prefix: 'subdir/'\n"
@@ -208,8 +274,10 @@ def test_load_rule_specs_module_with_prefix_applied(make_pipeline):
     )
     specs = load_rule_specs(pipeline)
     a = next(s for s in specs if s.name == "a")
+    # Snakemake does NOT inline global constraints into module-imported rules,
+    # so the path carries no annotation; the fallback dict supplies it.
     assert a.outputs == ["subdir/results/{n}.txt"], a.outputs
-
+    assert a.constraints.get("n") == "[0-9]{2}"
 
 def test_load_rule_specs_does_not_pollute_cwd(make_pipeline, tmp_path, monkeypatch):
     pipeline = make_pipeline(
@@ -225,9 +293,6 @@ def test_load_rule_specs_does_not_pollute_cwd(make_pipeline, tmp_path, monkeypat
     new_entries = after - before
     # Should not have created a .snakemake/ in CWD
     assert not any(p.name == ".snakemake" for p in new_entries)
-
-
-from snakeprune.patterns import find_rule_patterns
 
 
 def test_find_rule_patterns_compiles_with_constraints(make_pipeline):
@@ -357,10 +422,15 @@ def test_extract_script_emits_rules_json(make_pipeline):
     assert payload["rules"][0]["outputs"] == ["results/{n}.txt"]
 
 
-def test_extract_script_strips_inline_constraints(make_pipeline):
+def test_extract_script_emits_raw_annotated_paths_and_fallback_constraints(make_pipeline):
+    # Snakemake inlines global constraints into the path string; the extractor
+    # must pass that through untouched and also emit the fallback dict.
     pipeline = make_pipeline(
+        "wildcard_constraints:\n"
+        "    chrom = '[0-9]{1,2}'\n"
+        "\n"
         "rule a:\n"
-        "    output: 'results/{x,[0-9]+}.txt'\n"
+        "    output: 'results/{x,[0-9]+}.{chrom}.txt'\n"
         "    shell: 'touch {output}'\n"
     )
     result = _subprocess.run(
@@ -371,9 +441,9 @@ def test_extract_script_strips_inline_constraints(make_pipeline):
     )
     assert result.returncode == 0, result.stderr
     rule = _json.loads(result.stdout)["rules"][0]
-    assert rule["outputs"] == ["results/{x}.txt"]
-    assert rule["constraints"].get("x") == "[0-9]+"
-
+    assert rule["outputs"] == ["results/{x,[0-9]+}.{chrom,[0-9]{1,2}}.txt"]
+    assert rule["constraints"] == {"chrom": "[0-9]{1,2}"}
+    assert rule["directories"] == []
 
 def test_extract_script_missing_snakefile_exits_nonzero(tmp_path):
     empty = tmp_path / "empty"
