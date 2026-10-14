@@ -877,3 +877,23 @@ def test_cli_scan_files_inside_directory_output_are_live(make_pipeline, make_res
     assert "y.txt" not in result.stdout
     assert ".snakemake_timestamp" not in result.stdout
     assert "z.txt" not in result.stdout
+
+
+def test_cli_scan_permissive_wildcards_matches_slash_in_wildcard(make_pipeline, make_results):
+    # Snakemake's own default wildcard regex is `.+`, which spans `/`. A file
+    # Snakemake produced with sample='x/y' is live under --permissive-wildcards
+    # (and, deliberately, an orphan under the stricter default — see README).
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{sample}/flat.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["x/y/flat.txt", "x/flat.txt"])
+    strict = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert strict.exit_code == 0, strict.output
+    assert "x/y/flat.txt" in strict.stdout
+    permissive = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--permissive-wildcards"]
+    )
+    assert permissive.exit_code == 0, permissive.output
+    assert "flat.txt" not in permissive.stdout

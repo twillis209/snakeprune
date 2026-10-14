@@ -46,6 +46,9 @@ snakeprune scan path/to/pipeline path/to/results --ignore "notes/**" --ignore "*
 # Skip an entire subtree from the walk (faster than --ignore for big dirs)
 snakeprune scan path/to/pipeline path/to/results --exclude-dir old_results_to_keep
 
+# Let unconstrained wildcards span '/' (Snakemake's own default); fewer orphans
+snakeprune scan path/to/pipeline path/to/results --permissive-wildcards
+
 # Actually delete (refuses symlinks unless --allow-symlinks)
 snakeprune scan path/to/pipeline path/to/results --delete
 
@@ -88,6 +91,7 @@ snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yam
 ### Limitations
 
 - **`--exclude-dir` vs `--ignore`:** `--exclude-dir DIR` prunes a whole subtree from the walk (the directory is never descended into), which is faster than `--ignore "DIR/**"` for large directories you want to protect. `--ignore` remains for file-level glob filtering. Relative `--exclude-dir` paths resolve against the results directory.
+- **Unconstrained wildcards are stricter than Snakemake's.** Snakemake lets an unconstrained `{wildcard}` match `.+`, which spans `/`. `snakeprune` deliberately uses `[^/]+` instead: with `.+`, a rule writing `results/{sample}/{replicate}/out.txt` would also claim `results/A/B/norm/out.txt`, hiding exactly the stale deeper layouts this tool exists to find. The cost is that a file Snakemake produced with a `/` inside a wildcard value (e.g. `sample=batch1/s1`) is reported as an orphan. If your workflow does that, pass `--permissive-wildcards`, or add a `wildcard_constraints` block so the two tools agree.
 - **Config-conditional rules.** If a rule is `include:`-d only under specific config values, pass the matching config with `--configfile path/to/config.yaml` (repeatable). Without it, the extractor sees an empty config and config-gated rules are absent — their outputs would then be reported as orphans.
 - **Function/callable outputs fail loudly, never silently.** Snakemake itself rejects a rule whose `output:` is a function or `lambda` (`Only input files can be specified as functions`), so such a workflow never loads. `snakeprune` surfaces that as an error (exit 4) rather than guessing — it never turns an unrecognised output into a bogus orphan pattern.
 - **Symlinked subdirectories are not recursed.** Files reachable only via a symlinked subdirectory are never scanned. The CLI surfaces a one-line count of skipped symlinked subdirectories at the end of the walk so this is at least visible.
@@ -109,7 +113,7 @@ If `python` is not on `$PATH`, `snakeprune` exits with code 4 and a message aski
 
 1. Resolve the Snakefile (direct, then `workflow/Snakefile` fallback).
 2. Locate `python` on `$PATH` and run the bundled `_extract.py` script as a subprocess: `<python> .../_extract.py <pipeline_dir> [--configfile ...]`. The subprocess loads the workflow via `snakemake.api.SnakemakeApi`, walks `workflow.rules`, and emits `{"rules": [...]}` JSON on stdout.
-3. For each file a rule produces (`output`, `log`, and `benchmark` paths), substitute `{wildcard}` placeholders with their effective regex bodies (rule-local `wildcard_constraints` override workflow-global; inline `{name,regex}` annotations are honoured; missing constraints default to `[^/]+`). The combined alternation regex is built once for the whole scan.
+3. For each file a rule produces (`output`, `log`, and `benchmark` paths), substitute `{wildcard}` placeholders with their effective regex bodies (rule-local `wildcard_constraints` override workflow-global; inline `{name,regex}` annotations are honoured; missing constraints default to `[^/]+`, or Snakemake's own `.+` under `--permissive-wildcards`). The combined alternation regex is built once for the whole scan.
 4. Walk the `results/` tree, skipping symlinks by default and any path matching an `--ignore` glob.
 5. For each regular file, match the path against all compiled rule patterns. Files matching none are orphans.
 6. With `--rule-attribution`, report each orphan with the rule whose literal path prefix it most closely resembles.

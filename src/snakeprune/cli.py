@@ -10,6 +10,8 @@ import typer
 
 from snakeprune.delete import delete_orphans
 from snakeprune.patterns import (
+    DEFAULT_WILDCARD_REGEX,
+    SNAKEMAKE_WILDCARD_REGEX,
     ExtractorError,
     PatternError,
     SnakefileNotFound,
@@ -104,6 +106,13 @@ def scan(
         help="Directory subtree to skip entirely; repeatable. Relative paths "
              "resolve against results_dir.",
     ),
+    permissive_wildcards: bool = typer.Option(
+        False,
+        "--permissive-wildcards",
+        help="Use Snakemake's own `.+` for unconstrained wildcards (spans `/`). "
+             "Default is the stricter `[^/]+`, which is what lets snakeprune "
+             "detect files from older, differently-nested output layouts.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -142,7 +151,11 @@ def scan(
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:
         patterns = find_rule_patterns(
-            pipeline_dir, configfiles=tuple(configfile or ())
+            pipeline_dir,
+            configfiles=tuple(configfile or ()),
+            default_wildcard_regex=(
+                SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
+            ),
         )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)

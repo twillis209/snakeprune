@@ -228,11 +228,14 @@ def run_extractor(
 def find_rule_patterns(
     pipeline_dir: Path,
     configfiles: Sequence[Path] = (),
+    default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
 ) -> list[tuple[str, re.Pattern]]:
     """Top-level: return one (rule_name, compiled_regex) per produced path.
 
     Rules with multiple outputs (e.g., multiext) contribute multiple entries, one
-    per output file pattern.
+    per output file pattern. `default_wildcard_regex` is the body used for
+    wildcards with no constraint at all (default `[^/]+`; pass
+    `SNAKEMAKE_WILDCARD_REGEX` for Snakemake's own `.+`).
     """
     # Pre-check: surface SnakefileNotFound before spawning the extractor
     # subprocess, so a missing Snakefile exits 2 (not 4 via ExtractorError).
@@ -243,6 +246,7 @@ def find_rule_patterns(
             regex_str = wildcard_pattern_to_regex(
                 output_str,
                 spec.constraints,
+                default=default_wildcard_regex,
                 is_directory=output_str in spec.directories,
             )
             out.append((spec.name, re.compile(regex_str)))

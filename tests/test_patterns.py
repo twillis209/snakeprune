@@ -362,6 +362,19 @@ def test_find_rule_patterns_compiles_with_constraints(make_pipeline):
     assert not regex.match("results/abc.txt")
 
 
+def test_find_rule_patterns_permissive_default_keeps_backreference_equality(make_pipeline):
+    # `.+` as the default must not break implicit equality of repeated
+    # wildcards: {x}/{x} still requires both occurrences to be identical.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x}/{x}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (_, regex), = find_rule_patterns(pipeline, default_wildcard_regex=".+")
+    assert regex.match("results/a/b/a/b.txt")
+    assert not regex.match("results/a/b/c.txt")
+
+
 from snakeprune.patterns import combine_rule_patterns
 
 
