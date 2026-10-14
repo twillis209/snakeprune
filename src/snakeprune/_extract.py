@@ -59,6 +59,7 @@ def _resolve_workdir(snakefile: Path) -> Path:
 
 def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> dict:
     from snakemake.api import SnakemakeApi
+    from snakemake.io import is_flagged
     from snakemake.settings.enums import Quietness
     from snakemake.settings.types import (
         ConfigSettings,
@@ -87,6 +88,7 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
             if rule.benchmark:
                 produced.append(rule.benchmark)
             raw_outputs = list(dict.fromkeys(str(o) for o in produced))
+            directories = [str(o) for o in rule.output if is_flagged(o, "directory")]
             rule_constraints = dict(
                 getattr(rule, "wildcard_constraints", {}) or {}
             )
@@ -94,7 +96,7 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
                 {
                     "name": rule.name,
                     "outputs": raw_outputs,
-                    "directories": [],
+                    "directories": directories,
                     "constraints": {**global_constraints, **rule_constraints},
                 }
             )

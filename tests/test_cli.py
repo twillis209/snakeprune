@@ -846,3 +846,34 @@ def test_cli_scan_unparseable_pattern_exits_4(make_pipeline, make_results, monke
     assert result.exit_code == 4
     assert "Cannot parse wildcard syntax" in result.output
     assert "1.txt" not in result.stdout
+
+
+def test_cli_scan_files_inside_directory_output_are_live(make_pipeline, make_results):
+    # A directory() output is produced as a whole; every file inside — including
+    # Snakemake's own .snakemake_timestamp marker — is live. Deleting them would
+    # corrupt an output Snakemake still believes is complete.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: directory('results/{sample}/outdir')\n"
+        "    shell: 'mkdir -p {output}'\n"
+        "\n"
+        "rule b:\n"
+        "    output: directory('results/static')\n"
+        "    shell: 'mkdir -p {output}'\n"
+    )
+    results = make_results(
+        [
+            "A/outdir/x.txt",
+            "A/outdir/deep/y.txt",
+            "A/outdir/.snakemake_timestamp",
+            "static/z.txt",
+            "A/other.txt",
+        ]
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "other.txt" in result.stdout
+    assert "x.txt" not in result.stdout
+    assert "y.txt" not in result.stdout
+    assert ".snakemake_timestamp" not in result.stdout
+    assert "z.txt" not in result.stdout

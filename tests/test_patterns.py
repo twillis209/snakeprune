@@ -122,6 +122,45 @@ def test_default_wildcard_regex_is_overridable():
     assert regex == r"^results/(?P<n>.+)\.txt$"
 
 
+def test_directory_pattern_matches_contents():
+    # A directory() output is live as a whole: the directory itself and every
+    # file beneath it (including .snakemake_timestamp) must match.
+    regex_str = wildcard_pattern_to_regex(
+        "results/{s}/outdir", constraints={}, is_directory=True
+    )
+    assert regex_str == r"^results/(?P<s>[^/]+)/outdir(?:/.*)?$"
+    pat = _re_module.compile(regex_str)
+    assert pat.match("results/A/outdir")
+    assert pat.match("results/A/outdir/x.txt")
+    assert pat.match("results/A/outdir/deep/.snakemake_timestamp")
+    assert not pat.match("results/A/outdir2/x.txt")
+
+
+def test_directory_pattern_without_wildcards_keeps_literal_prefix():
+    # Contents of a static directory() output must still yield a literal prefix
+    # so the scanner can restrict its walk to that subtree.
+    from snakeprune.patterns import extract_literal_prefix
+    regex_str = wildcard_pattern_to_regex("results/static", constraints={}, is_directory=True)
+    compiled = _re_module.compile(regex_str)
+    assert compiled.match("results/static/z.txt")
+    assert extract_literal_prefix(compiled) == "results/static"
+
+
+def test_load_rule_specs_reports_directory_outputs(make_pipeline):
+    # Only directory()-flagged outputs are reported in `directories`; plain
+    # file outputs stay out of it so they keep exact-match semantics.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output:\n"
+        "        d = directory('results/{s}/outdir'),\n"
+        "        f = 'results/{s}/flat.txt'\n"
+        "    shell: 'mkdir -p {output.d}; touch {output.f}'\n"
+    )
+    specs = load_rule_specs(pipeline)
+    assert specs[0].directories == ["results/{s}/outdir"]
+    assert set(specs[0].outputs) == {"results/{s}/outdir", "results/{s}/flat.txt"}
+
+
 def test_unparseable_brace_raises_pattern_error():
     # Defence in depth: anything brace-shaped that the parser does not
     # recognise must raise, never be escaped into a literal that silently
