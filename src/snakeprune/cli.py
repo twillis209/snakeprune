@@ -131,9 +131,16 @@ def scan(
         raise typer.Exit(code=3)
 
     if trash is not None:
-        results_abs = os.path.abspath(results_dir)
-        trash_abs = os.path.abspath(trash)
-        if trash_abs == results_abs or trash_abs.startswith(results_abs + os.sep):
+        # Compare both lexical and symlink-resolved forms so a symlinked
+        # results dir cannot be bypassed via its real path (or vice versa).
+        inside = any(
+            t == r or t.startswith(r + os.sep)
+            for t, r in (
+                (os.path.abspath(trash), os.path.abspath(results_dir)),
+                (os.path.realpath(trash), os.path.realpath(results_dir)),
+            )
+        )
+        if inside:
             typer.echo(
                 "Refusing to delete: --trash must not be inside the results "
                 "directory being scanned. The next scan would report the "
@@ -170,6 +177,7 @@ def scan(
                 SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
             ),
             on_warning=lambda msg: typer.echo(msg, err=True),
+            results_dir=results_dir,
         )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)

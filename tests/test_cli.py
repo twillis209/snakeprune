@@ -892,6 +892,7 @@ def test_cli_scan_permissive_wildcards_matches_slash_in_wildcard(make_pipeline, 
     strict = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert strict.exit_code == 0, strict.output
     assert "x/y/flat.txt" in strict.stdout
+    assert "x/flat.txt" not in strict.stdout
     permissive = runner.invoke(
         app, ["scan", str(pipeline), str(results), "--permissive-wildcards"]
     )
@@ -990,7 +991,7 @@ def test_cli_scan_trash_inside_results_dir_refuses(make_pipeline, make_results):
     results = make_results(["orphan.csv"])
     result = runner.invoke(
         app,
-        ["scan", str(pipeline), str(results), "--trash", str(results / ".trash"), "--yes"],
+        ["scan", str(pipeline), str(results), "--trash", str(results / ".trash"), "--yes", "--allow-high-orphan-rate"],
     )
     assert result.exit_code == 3
     assert "Refusing" in result.output
@@ -1034,3 +1035,101 @@ def test_cli_scan_trash_as_ancestor_of_results_dir_collides_and_refuses(
     assert result.exit_code == 3
     assert "already exists" in result.output
     assert (results / "orphan.csv").exists()
+
+
+def test_cli_scan_trash_via_symlinked_results_dir_refuses(make_pipeline, tmp_path):
+    # Safety: results is a symlink to /real; --trash /real/.trash is inside the
+    # scanned tree by realpath even though the abspath comparison passes.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "orphan.csv").touch()
+    link = tmp_path / "results"
+    link.symlink_to(real)
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(link), "--trash", str(real / ".trash"), "--yes", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 3, result.output
+    assert "--trash" in result.output
+    assert (real / "orphan.csv").exists()
+
+
+def test_cli_scan_trash_sibling_dir_with_results_prefix_is_allowed(
+    make_pipeline, make_results, tmp_path
+):
+    # Safety/usability: a sibling whose name merely starts with `results` is
+    # outside the tree; the guard must compare on a path-separator boundary.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["orphan.csv"])
+    trash = tmp_path / "results_trash"
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 0, result.output
+    assert (trash / "results" / "orphan.csv").exists()
+    assert not (results / "orphan.csv").exists()
+
+
+def test_cli_scan_trash_relative_path_inside_results_refuses(
+    make_pipeline, make_results, monkeypatch
+):
+    # Safety: a relative --trash resolves against the cwd; from inside results
+    # it lands in the scanned tree.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["orphan.csv"])
+    monkeypatch.chdir(results)
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--trash", ".trash", "--yes", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 3, result.output
+    assert "--trash" in result.output
+    assert (results / "orphan.csv").exists()
+
+
+def test_cli_scan_invalid_constraint_regex_exits_4(make_pipeline, make_results):
+    # Safety: a bad constraint regex must be a clean exit-4 pattern error, not
+    # a traceback, and must never fall through to listing orphans.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x,[a-z}/a.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["q/a.txt", "orphan.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4, result.output
+    assert "Invalid wildcard constraint" in result.output
+    assert "orphan.csv" not in result.output
+
+
+def test_cli_scan_absolute_output_under_results_dir_is_live(
+    make_pipeline, make_results, tmp_path
+):
+    # Safety: a rule writing to an absolute path under the scanned results dir
+    # (but outside the workdir) must keep its files live, not orphan them.
+    results_abs = str(tmp_path / "results")
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '" + results_abs + "/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "orphan.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "orphan.csv" in result.stdout
+    assert "1.txt" not in result.stdout
+    assert "WARNING: dropping" not in result.output

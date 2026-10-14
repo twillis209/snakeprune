@@ -741,3 +741,38 @@ def test_run_extractor_callable_log_or_benchmark_fails_loudly(make_pipeline, dir
     )
     with pytest.raises(ExtractorError):
         run_extractor(pipeline)
+
+
+def test_find_rule_patterns_invalid_constraint_regex_raises_pattern_error(make_pipeline):
+    from snakeprune.patterns import PatternError, find_rule_patterns
+    # Safety: an uncompilable constraint must fail loudly as PatternError (exit
+    # 4), never as a raw re.error traceback.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{x,[a-z}/a.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    with pytest.raises(PatternError) as excinfo:
+        find_rule_patterns(pipeline)
+    assert "rule `a`" in str(excinfo.value)
+    assert "results/{x,[a-z}/a.txt" in str(excinfo.value)
+
+
+def test_find_rule_patterns_maps_absolute_path_under_results_dir(make_pipeline, tmp_path):
+    from snakeprune.patterns import find_rule_patterns
+    # Safety: an absolute path under the scanned results dir is rewritten to
+    # `<results-name>/<rel>` instead of dropped, so its files stay live.
+    results = tmp_path / "results"
+    results.mkdir()
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '" + str(results) + "/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    warnings: list[str] = []
+    patterns = find_rule_patterns(
+        pipeline, on_warning=warnings.append, results_dir=results
+    )
+    assert len(patterns) == 1
+    assert patterns[0][1].match("results/1.txt")
+    assert warnings == []

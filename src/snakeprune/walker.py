@@ -120,7 +120,7 @@ class OrphanFile:
 
 
 def attribute_orphan_to_rule(target: str, patterns: list[tuple[str, re.Pattern]]) -> str | None:
-    """Best-effort guess: the rule whose output pattern shares the longest literal
+    """Best-effort guess: the rule whose path pattern shares the longest literal
     prefix with `target`. Falls back to None if no rule shares a meaningful prefix.
     """
     best_rule: str | None = None

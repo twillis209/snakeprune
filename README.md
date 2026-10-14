@@ -76,7 +76,7 @@ snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yam
 - **Naughty target directories.** Targeting a conventional Snakemake input/config directory (`resources`, `config`, `profile`, `workflow`, `.snakemake`) prints a warning, and — under `--delete` / `--trash` — refuses unless `--allow-naughty-dir` is passed. The check fires before the workflow is even loaded, and especially guards against pointing at `resources/` (downloaded reference data). Extend the list for a run with `--naughty-dir NAME` (repeatable).
 - **Trash inside the results tree.** `--trash DIR` is refused if `DIR` is the results directory or anywhere beneath it, because the next scan would report the trashed files as orphans.
 - **Unparseable rule paths.** If a rule path contains brace syntax `snakeprune` cannot read, it exits 4 rather than guess — an unparsed pattern would mark every file of that rule as an orphan.
-- **Absolute output paths outside the project.** A rule writing to an absolute path that is not under the workflow directory can never match a scanned file; the pattern is dropped with a warning (shown even under `--quiet`). Absolute paths *under* the workflow directory are relativised and work normally.
+- **Absolute output paths outside the project.** Absolute paths under the workflow directory or under the scanned results directory are relativised and work normally. Only an absolute path outside both is dropped, with a warning (shown even under `--quiet`), because no scanned file can match it.
 
 ### Deletion flow
 

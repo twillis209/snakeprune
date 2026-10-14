@@ -1,7 +1,8 @@
-"""Build regexes from Snakemake rule output patterns."""
+"""Build regexes from Snakemake rule path patterns."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -225,11 +226,22 @@ def run_extractor(
     ]
 
 
+def _rewrite_under_results_dir(path: str, results_dir: Path | None) -> str | None:
+    """Rewrite an absolute `path` under `results_dir` to `<name>/<rel>`, else None."""
+    if results_dir is None:
+        return None
+    for base in (os.path.abspath(results_dir), os.path.realpath(results_dir)):
+        if path.startswith(base + "/"):
+            return results_dir.name + "/" + path[len(base) + 1 :]
+    return None
+
+
 def find_rule_patterns(
     pipeline_dir: Path,
     configfiles: Sequence[Path] = (),
     default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
     on_warning: Callable[[str], None] | None = None,
+    results_dir: Path | None = None,
 ) -> list[tuple[str, re.Pattern]]:
     """Top-level: return one (rule_name, compiled_regex) per produced path.
 
@@ -238,10 +250,12 @@ def find_rule_patterns(
     wildcards with no constraint at all (default `[^/]+`; pass
     `SNAKEMAKE_WILDCARD_REGEX` for Snakemake's own `.+`).
 
-    Absolute paths that the extractor could not relativise against the workdir
-    can never match `<results-dir-name>/<rel>`; they are skipped and reported
-    through `on_warning` (if given) so the user knows the live set is narrower
-    than the workflow.
+    Absolute paths the extractor could not relativise against the workdir are
+    handled in one of two ways. If `results_dir` is given and the path lies
+    under it (by `abspath` or `realpath`), it is rewritten to
+    `<results-dir-name>/<rel>` and used normally. Otherwise it can never match
+    a scanned file; it is skipped and reported through `on_warning` (if given)
+    so the user knows the live set is narrower than the workflow.
     """
     # Pre-check: surface SnakefileNotFound before spawning the extractor
     # subprocess, so a missing Snakefile exits 2 (not 4 via ExtractorError).
@@ -249,23 +263,33 @@ def find_rule_patterns(
     out: list[tuple[str, re.Pattern]] = []
     for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
         for output_str in spec.outputs:
+            is_directory = output_str in spec.directories
             if output_str.startswith("/"):
-                if on_warning is not None:
-                    on_warning(
-                        f"WARNING: dropping absolute path `{output_str}` from "
-                        f"rule `{spec.name}`: it lies outside the workflow "
-                        f"directory and can never match a scanned file. Files "
-                        f"it produces under the results dir would be reported "
-                        f"as orphans."
-                    )
-                continue
+                rewritten = _rewrite_under_results_dir(output_str, results_dir)
+                if rewritten is None:
+                    if on_warning is not None:
+                        on_warning(
+                            f"WARNING: dropping absolute path `{output_str}` "
+                            f"from rule `{spec.name}`: it lies outside both "
+                            f"the workflow directory and the scanned results "
+                            f"directory, so no scanned file can match it."
+                        )
+                    continue
+                output_str = rewritten
             regex_str = wildcard_pattern_to_regex(
                 output_str,
                 spec.constraints,
                 default=default_wildcard_regex,
-                is_directory=output_str in spec.directories,
+                is_directory=is_directory,
             )
-            out.append((spec.name, re.compile(regex_str)))
+            try:
+                compiled = re.compile(regex_str)
+            except re.error as exc:
+                raise PatternError(
+                    f"Invalid wildcard constraint regex in rule "
+                    f"`{spec.name}` path `{output_str}`: {exc}"
+                ) from exc
+            out.append((spec.name, compiled))
     return out
 
 

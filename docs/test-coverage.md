@@ -42,7 +42,7 @@ loads your actual Snakemake workflow and asks it what its rules output.
 
 **It reads the real workflow, not a parody of it.** `tests/test_patterns.py`
 runs a standalone extractor script as a subprocess against synthetic Snakefiles
-and checks that the output patterns it recovers match what Snakemake itself
+and checks that the path patterns it recovers match what Snakemake itself
 would resolve. This includes the cases that are easy to get wrong:
 
 - Wildcard constraints, whether declared globally
@@ -62,7 +62,7 @@ would resolve. This includes the cases that are easy to get wrong:
   matches but `results/a/b.bam` does not.
 
 **It translates those patterns into matchers faithfully.** The conversion from
-a Snakemake output pattern to an anchored regex escapes literal regex
+a Snakemake rule path pattern to an anchored regex escapes literal regex
 metacharacters (dots, plus signs, brackets) so they are matched literally, and
 the combiner that merges every rule's pattern into one matcher is tested to
 preserve the match semantics of the individual patterns — including when
