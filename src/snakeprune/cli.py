@@ -8,7 +8,7 @@ from typing import Optional
 
 import typer
 
-from snakeprune.delete import delete_orphans
+from snakeprune.delete import DeletionFailed, delete_orphans
 from snakeprune.patterns import (
     DEFAULT_WILDCARD_REGEX,
     SNAKEMAKE_WILDCARD_REGEX,
@@ -294,6 +294,9 @@ def scan(
                 trash_dir=trash,
                 results_dir_name=results_dir.name if trash is not None else None,
             )
+        except DeletionFailed as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=5)
         except (PermissionError, IsADirectoryError, FileExistsError) as exc:
             typer.echo(f"Refusing to delete: {exc}", err=True)
             raise typer.Exit(code=3)

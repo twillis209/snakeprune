@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from snakeprune.delete import delete_orphans
+from snakeprune.delete import DeletionFailed, delete_orphans
 from snakeprune.walker import OrphanFile
 
 
@@ -191,3 +191,67 @@ def test_delete_orphans_trash_collision_check_is_all_or_nothing(tmp_path):
     # The non-colliding orphan must still be in place.
     assert first.read_text() == "first"
     assert not (trash / "results" / "first.txt").exists()
+
+
+def test_delete_orphans_mid_batch_failure_reports_progress(tmp_path, monkeypatch):
+    # Validation is all-or-nothing, but once unlinking starts a failure can
+    # strike half-way. The caller must learn exactly how many files are already
+    # gone — "Refusing to delete" after the fact would be a lie.
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    third = tmp_path / "third.txt"
+    for f in (first, second, third):
+        f.write_text("data")
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, *args, **kwargs):
+        if self == second:
+            raise PermissionError(f"[Errno 13] Permission denied: '{self}'")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    with pytest.raises(DeletionFailed) as exc:
+        delete_orphans(
+            [
+                OrphanFile(path=first, rel="first.txt"),
+                OrphanFile(path=second, rel="second.txt"),
+                OrphanFile(path=third, rel="third.txt"),
+            ]
+        )
+    assert exc.value.completed == 1
+    assert exc.value.total == 3
+    assert exc.value.path == second
+    assert "1 of 3" in str(exc.value)
+    assert not first.exists()
+    assert second.exists()
+    assert third.exists()
+
+
+def test_delete_orphans_trash_mid_batch_failure_reports_progress(tmp_path, monkeypatch):
+    # Same honesty requirement in trash mode: a failed move part-way must say
+    # how many files were already relocated and leave the rest untouched.
+    import shutil as _shutil
+    src = tmp_path / "src"
+    src.mkdir()
+    a = src / "a.txt"
+    b = src / "b.txt"
+    a.write_text("a")
+    b.write_text("b")
+    trash = tmp_path / "trash"
+    real_move = _shutil.move
+
+    def flaky_move(s, d, *args, **kwargs):
+        if str(s) == str(b):
+            raise OSError("disk full")
+        return real_move(s, d, *args, **kwargs)
+
+    monkeypatch.setattr("snakeprune.delete.shutil.move", flaky_move)
+    with pytest.raises(DeletionFailed) as exc:
+        delete_orphans(
+            [OrphanFile(path=a, rel="a.txt"), OrphanFile(path=b, rel="b.txt")],
+            trash_dir=trash,
+            results_dir_name="src",
+        )
+    assert exc.value.completed == 1
+    assert (trash / "src" / "a.txt").exists()
+    assert b.exists()

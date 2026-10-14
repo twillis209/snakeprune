@@ -81,6 +81,17 @@ snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yam
 - `--delete` shows a summary (count + total bytes) and prompts `[y/N]` before unlinking.
 - `--yes` skips the prompt; required when stdin is not a TTY (e.g. in scripts).
 - `--trash DIR` moves each orphan to `DIR/<results-dir-name>/<rel-path>` instead of unlinking, so deletions are reversible. Passing `--trash` implies deletion — you do not also need `--delete`.
+- If a deletion batch fails part-way (permissions, disk full, file vanished), `snakeprune` stops, prints `Deleted N of M file(s) before failing at <path>`, and exits 5. Files before `<path>` are gone; files after it were not touched.
+
+### Exit codes
+
+| code | meaning |
+|---|---|
+| 0 | success, or you answered `n` at the prompt |
+| 2 | no Snakefile found |
+| 3 | refused by a safety guard before anything was deleted |
+| 4 | the workflow could not be loaded, or a rule path could not be parsed |
+| 5 | deletion started but did not complete (message says how many were removed) |
 
 ### Recommended first-use workflow
 

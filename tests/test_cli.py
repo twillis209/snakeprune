@@ -945,3 +945,35 @@ def test_cli_scan_all_rules_foreign_absolute_hits_empty_rule_refusal(make_pipeli
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 3
     assert "Refusing to scan" in result.output
+
+
+def test_cli_scan_delete_partial_failure_exits_5_with_count(
+    make_pipeline, make_results, monkeypatch
+):
+    # Safety: when deletion fails mid-batch some files are already gone, so the
+    # CLI must report the real count and exit 5, never claim it "refused".
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "o1.csv", "o2.csv", "o3.csv"])
+    from pathlib import Path as _P
+    real_unlink = _P.unlink
+    calls = {"n": 0}
+
+    def flaky_unlink(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise PermissionError(f"[Errno 13] Permission denied: '{self}'")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(_P, "unlink", flaky_unlink)
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 5
+    assert "Deleted 1 of 3" in result.output
+    assert "Refusing" not in result.output
+    assert (results / "1.txt").exists()
