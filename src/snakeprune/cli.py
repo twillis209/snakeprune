@@ -16,8 +16,8 @@ from snakeprune.patterns import (
     PatternError,
     SnakefileNotFound,
     combine_rule_patterns,
-    extract_literal_prefix,
     find_rule_patterns,
+    rule_literal_prefixes,
 )
 from snakeprune.walker import (
     OrphanFile,
@@ -195,9 +195,10 @@ def scan(
             err=True,
         )
         raise typer.Exit(code=3)
+    prefixes = rule_literal_prefixes(patterns)
     if patterns and not allow_basename_mismatch:
         results_prefix = results_dir.name + "/"
-        rule_prefixes = [extract_literal_prefix(p) for _, p in patterns]
+        rule_prefixes = [prefix for _, prefix in prefixes]
         if not any(rp.startswith(results_prefix) for rp in rule_prefixes):
             # Surface up to 3 most common first-segments to help the user.
             from collections import Counter
@@ -237,7 +238,7 @@ def scan(
         match_target = target_prefix + rel
         if combined is not None and combined.match(match_target):
             continue
-        likely = attribute_orphan_to_rule(match_target, patterns) if rule_attribution else None
+        likely = attribute_orphan_to_rule(match_target, patterns, prefixes) if rule_attribution else None
         orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
 

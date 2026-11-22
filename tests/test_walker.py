@@ -1,5 +1,7 @@
 import os
+import re
 
+from snakeprune.patterns import rule_literal_prefixes
 from snakeprune.walker import iter_results_files
 
 
@@ -98,3 +100,17 @@ def test_iter_results_files_stats_omitted_does_not_error(make_results, tmp_path)
     rels = [rel for _, rel in iter_results_files(results)]
     assert rels == ["a.txt"]
 
+
+
+def test_attribute_orphan_uses_precomputed_prefixes(monkeypatch):
+    import snakeprune.walker as walker
+    pats = [("a", re.compile(r"^results/a/(?P<s>[^/]+)\.txt$")),
+            ("b", re.compile(r"^results/b/(?P<s>[^/]+)\.txt$"))]
+    prefixes = rule_literal_prefixes(pats)
+    assert prefixes == [("a", "results/a/"), ("b", "results/b/")]
+
+    def boom(_):
+        raise AssertionError("prefix recomputed per orphan")
+
+    monkeypatch.setattr(walker, "extract_literal_prefix", boom)
+    assert walker.attribute_orphan_to_rule("results/b/old.csv", pats, prefixes) == "b"

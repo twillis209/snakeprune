@@ -119,14 +119,22 @@ class OrphanFile:
     likely_rule: str | None = None
 
 
-def attribute_orphan_to_rule(target: str, patterns: list[tuple[str, re.Pattern]]) -> str | None:
+def attribute_orphan_to_rule(
+    target: str,
+    patterns: list[tuple[str, re.Pattern]],
+    prefixes: list[tuple[str, str]] | None = None,
+) -> str | None:
     """Best-effort guess: the rule whose path pattern shares the longest literal
     prefix with `target`. Falls back to None if no rule shares a meaningful prefix.
+
+    Pass precomputed `prefixes` (see `rule_literal_prefixes`) to avoid
+    recomputing them per call; `patterns` is then not consulted.
     """
+    if prefixes is None:
+        prefixes = [(name, extract_literal_prefix(regex)) for name, regex in patterns]
     best_rule: str | None = None
     best_prefix_len = 0
-    for name, regex in patterns:
-        prefix = extract_literal_prefix(regex)
+    for name, prefix in prefixes:
         if target.startswith(prefix) and len(prefix) > best_prefix_len:
             best_prefix_len = len(prefix)
             best_rule = name

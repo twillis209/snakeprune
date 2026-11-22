@@ -366,3 +366,8 @@ def combine_rule_patterns(
         )
         parts.append(f"(?:{body})")
     return re.compile("^(?:" + "|".join(parts) + ")$")
+
+
+def rule_literal_prefixes(patterns: list[tuple[str, re.Pattern]]) -> list[tuple[str, str]]:
+    """Return ``(rule name, literal prefix)`` for each pattern, in order."""
+    return [(name, extract_literal_prefix(regex)) for name, regex in patterns]
