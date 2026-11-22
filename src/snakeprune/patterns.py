@@ -296,7 +296,7 @@ def find_rule_patterns(
 def extract_literal_prefix(compiled: re.Pattern) -> str:
     """Return the un-escaped literal prefix of an anchored rule regex.
 
-    Reads ``compiled.pattern`` up to the first ``(`` (the first capture group)
+    Reads ``compiled.pattern`` up to the first unescaped ``(`` (the first capture group)
     and reverses ``re.escape``-style backslash escaping so the result is a
     real path prefix. Returns the entire literal body (minus the trailing
     ``$``) if the pattern has no capture group.
@@ -304,7 +304,16 @@ def extract_literal_prefix(compiled: re.Pattern) -> str:
     body = compiled.pattern.lstrip("^")
     if body.endswith("$"):
         body = body[:-1]
-    cut = body.find("(")
+    cut = -1
+    i = 0
+    while i < len(body):
+        if body[i] == "\\":
+            i += 2
+            continue
+        if body[i] == "(":
+            cut = i
+            break
+        i += 1
     literal = body if cut == -1 else body[:cut]
     return re.sub(r"\\(.)", r"\1", literal)
 

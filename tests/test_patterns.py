@@ -456,6 +456,18 @@ def test_extract_literal_prefix_handles_pattern_without_wildcards():
     assert extract_literal_prefix(pat) == "results/static/file.txt"
 
 
+def test_extract_literal_prefix_ignores_escaped_paren():
+    regex = wildcard_pattern_to_regex("results/run(1)/{s}.txt", constraints={})
+    assert extract_literal_prefix(_re_module.compile(regex)) == "results/run(1)/"
+
+
+def test_extract_literal_prefix_escaped_paren_without_wildcard():
+    regex = wildcard_pattern_to_regex("results/run(1)/x.txt", constraints={})
+    assert (
+        extract_literal_prefix(_re_module.compile(regex)) == "results/run(1)/x.txt"
+    )
+
+
 import json as _json
 import subprocess as _subprocess
 import sys as _sys
