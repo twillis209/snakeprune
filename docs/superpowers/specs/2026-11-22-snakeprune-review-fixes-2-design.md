@@ -46,9 +46,14 @@ Findings are numbered as in the review.
   trailing slash. `find_rule_patterns` normalises each path before building the
   regex, treating `{…}` wildcards as opaque tokens: drop `.` segments, collapse
   repeated `/`, drop a trailing `/`, and collapse `seg/..` only when `seg` is a
-  literal segment. A `..` that follows a wildcard-bearing segment (or leads the
-  path) is left verbatim and reported through `on_warning`. `directories`
-  membership is decided before normalising.
+  literal segment. A path that *leads* with `..` is resolved against the
+  workdir to an absolute path and then takes the existing absolute-path route
+  (rewritten if under the results dir, else dropped with a warning). A `..`
+  that follows a wildcard-bearing segment cannot be resolved: it raises
+  `PatternError` (exit 4) rather than warn, because a warning would still let
+  that rule's files be listed and deleted (user decision 2026-11-22: always
+  default in favour of safety). `directories` membership is decided before
+  normalising.
 - **F3 — `**/` matches zero directories.** Purely additive: a glob matches if it
   matches today, or if it matches with any `**/` occurrence removed (leading
   `**/x` → `x`, inner `a/**/b` → `a/b`). Nothing ignored today stops being

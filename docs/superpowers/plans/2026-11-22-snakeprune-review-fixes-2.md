@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **When in doubt, the file stays.** A fix may make the tool refuse or keep more, never delete more.
+- **When in doubt, the file stays.** A fix may make the tool refuse or keep more, never delete more. Where the choice is between warning and refusing on input that could cause a live file to be listed, refuse (user decision 2026-11-22).
 - No new features, no flag renames, no change to exit-code meanings (0 ok/aborted, 2 no Snakefile, 3 refused, 4 extractor/pattern failure, 5 partial deletion).
 - `--follow-symlinks` does not descend into symlinked directories. Trash layout stays `<trash>/<results_dir.name>/<rel>`. `--ignore`'s `*` keeps crossing `/`.
 - `_extract.py` must not import from `snakeprune`. `load_rule_specs`' signature is unchanged.
@@ -29,7 +29,7 @@ Inputs the spec implies that are most likely to bite; each is pinned by a test i
 2. Results dir *is* the workdir (scanning the project root): empty prefix, nothing crashes, `results/x.txt` matches. → Task 4.
 3. `--exclude-dir` given by real path while `results_dir` is a symlinked path: the subtree really is pruned. → Task 7.
 4. A Snakefile that writes to stdout from a child process (`os.system("echo hi")`), not just `print()`. → Task 6.
-5. A rule path with `..` after a wildcard segment (`results/{s}/../x.txt`): a warning, not a crash and not a silently wrong pattern. → Task 3.
+5. A rule path with `..` after a wildcard segment (`results/{s}/../x.txt`): a clean exit-4 refusal, not a traceback and not a silently wrong pattern. → Task 3.
 
 ---
 
@@ -87,7 +87,8 @@ def test_attribute_orphan_uses_precomputed_prefixes(monkeypatch):
 **Files:** Modify `src/snakeprune/patterns.py`; Test `tests/test_patterns.py`, `tests/test_cli.py`.
 
 **Interfaces:**
-- Produces: `patterns.normalise_rule_path(path: str) -> tuple[str, bool]` — the normalised path and whether an unresolvable `..` remains.
+- Produces: `patterns.normalise_rule_path(path: str) -> tuple[str, bool]` — the normalised path and whether a `..` remains.
+- Produces: `patterns.resolve_workdir(pipeline_dir: Path) -> Path` — parent of the Snakefile's directory if that directory is named `workflow`, else the Snakefile's directory (same rule as `_extract._resolve_workdir`; raises `SnakefileNotFound`). Task 4 consumes it.
 
 Rules (wildcards matched by `_WILDCARD_RE` are opaque tokens, never altered, and a `/` inside a constraint is not a separator): drop `.` segments; collapse repeated `/`; drop a trailing `/`; preserve a single leading `/`; collapse `seg/..` only when `seg` contains no wildcard and is not itself `..`; any other `..` stays verbatim and the flag is `True`.
 
@@ -111,19 +112,21 @@ def test_normalise_rule_path(raw, expected, flag):
 
 CLI test `test_cli_scan_unnormalised_rule_paths_are_live`: Snakefile with rules writing `./results/a/{s}.txt`, `results//b/{s}.txt`, `results/sub/../d/{s}.txt`; results `a/1.txt`, `b/1.txt`, `d/1.txt`, `stale.csv`; assert exit 0, `stale.csv` in stdout, none of the three live files in stdout.
 
-Review Focus 5 — `test_find_rule_patterns_warns_on_dotdot_after_wildcard`: rule output `results/{s}/../x.txt`; call `find_rule_patterns(..., on_warning=msgs.append)`; assert it returns without raising and exactly one message contains both the rule name and `..`.
+Review Focus 5 — `test_find_rule_patterns_refuses_dotdot_after_wildcard`: rule output `results/{s}/../x.txt`; `pytest.raises(PatternError)` with the rule name and the path in the message. `test_cli_scan_dotdot_after_wildcard_exits_4`: same Snakefile with `--delete --yes` and a stray file in results; exit 4, the file still exists.
+
+`test_find_rule_patterns_leading_dotdot_resolves_against_workdir`: results dir is `tmp_path/results` (a sibling of the pipeline dir); rule output `../results/{s}.txt`; `find_rule_patterns(pipeline, results_dir=results)` returns one pattern that matches `results/1.txt`. `test_find_rule_patterns_leading_dotdot_outside_results_is_dropped_with_warning`: rule output `../elsewhere/{s}.txt`; returns no pattern for it and `on_warning` receives one message naming the rule.
 
 - [ ] **Step 2:** Run; expect FAIL.
-- [ ] **Step 3:** Implement `normalise_rule_path`; in `find_rule_patterns`, for each output: decide `is_directory` on the raw string, then normalise, warn if flagged (`WARNING: rule `<name>` path `<path>` contains `..` that snakeprune cannot resolve; files it writes may be reported as orphans.`), then the existing absolute-path handling and regex build.
+- [ ] **Step 3:** Implement `normalise_rule_path` and `resolve_workdir`. In `find_rule_patterns`, for each output: decide `is_directory` on the raw string, then normalise. If flagged and the path starts with `../`, join it onto `resolve_workdir(pipeline_dir)` and normalise again (the leading `..` segments now collapse against literal workdir segments), giving an absolute path. If it is still flagged, raise `PatternError`: ``Cannot resolve `..` in rule `<name>` path `<path>`. snakeprune refuses to guess: a wrong pattern would mark every file of this rule as an orphan.`` Then the existing absolute-path handling and regex build. **Never downgrade this refusal to a warning** — the project rule is that safety wins.
 - [ ] **Step 4:** Full suite passes.
-- [ ] **Step 5:** Commit `fix(patterns): normalise ./, // and literal .. in rule paths`.
+- [ ] **Step 5:** Commit `fix(patterns): normalise ./, // and .. in rule paths; refuse what cannot be resolved`.
 
 ### Task 4: Workdir-relative matching (F4)
 
 **Files:** Modify `src/snakeprune/patterns.py`, `src/snakeprune/cli.py`; Test `tests/test_patterns.py`, `tests/test_cli.py`.
 
 **Interfaces:**
-- Produces: `patterns.resolve_workdir(pipeline_dir: Path) -> Path` — parent of the Snakefile's directory if that directory is named `workflow`, else the Snakefile's directory (same rule as `_extract._resolve_workdir`; raises `SnakefileNotFound`).
+- Consumes: `patterns.resolve_workdir(pipeline_dir: Path) -> Path` from Task 3.
 - Produces: `patterns.results_match_prefix(pipeline_dir: Path, results_dir: Path) -> str` — tries every pairing of (`abspath`, `realpath`) of `results_dir` against (`abspath`, `realpath`) of the workdir: strictly under → POSIX relative path + `/`; equal → `""`; no pairing → `results_dir.name + "/"`.
 - Changes: `find_rule_patterns(..., results_dir: Path | None = None, match_prefix: str | None = None)`; `match_prefix=None` means `results_dir.name + "/"` (today's behaviour, keeps existing callers). `_rewrite_under_results_dir` rewrites to `match_prefix + rel`.
 
@@ -281,6 +284,6 @@ def test_ignore_glob_semantics(rel, glob, expected):
 
 **Files:** Modify `README.md`, `docs/test-coverage.md`.
 
-- [ ] **Step 1:** README: `--exclude-dir` must name an existing directory inside the results dir, relative to the results dir, else exit 3; `--ignore "**/*.bai"` now covers the top level, and `*` crosses `/`; `--follow-symlinks` covers symlinked files only and skipped directories are reported; nested results dirs are matched by their path relative to the workflow's working directory (basename when outside it); Snakefiles that print are supported; unnormalised rule paths are normalised and an unresolvable `..` warns.
+- [ ] **Step 1:** README: `--exclude-dir` must name an existing directory inside the results dir, relative to the results dir, else exit 3; `--ignore "**/*.bai"` now covers the top level, and `*` crosses `/`; `--follow-symlinks` covers symlinked files only and skipped directories are reported; nested results dirs are matched by their path relative to the workflow's working directory (basename when outside it); Snakefiles that print are supported; unnormalised rule paths are normalised and an unresolvable `..` is refused with exit 4.
 - [ ] **Step 2:** `docs/test-coverage.md`: add the new tests under the existing headings and refresh every count from `python -m pytest --collect-only -q | tail -1` and per-file `grep -c "^def test_"`. State the counts you measured; do not estimate.
 - [ ] **Step 3:** Full suite passes; commit `docs: document round-2 review fixes and refresh test counts`.
