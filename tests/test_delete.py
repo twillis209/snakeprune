@@ -292,3 +292,37 @@ def test_delete_orphans_trash_allows_existing_ancestor_directory(tmp_path):
     )
     assert not b.exists()
     assert (trash / "src" / "a" / "b.txt").read_text() == "b"
+
+
+def test_delete_orphans_trash_refuses_when_trash_dir_is_a_file(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    z = src / "z.txt"
+    z.write_text("z")
+    trash = tmp_path / "trash"
+    trash.write_text("blocker")
+    with pytest.raises(FileExistsError, match="not a directory"):
+        delete_orphans(
+            [OrphanFile(path=z, rel="z.txt")],
+            trash_dir=trash,
+            results_dir_name="src",
+        )
+    assert z.exists()
+    assert trash.read_text() == "blocker"
+
+
+def test_delete_orphans_trash_refuses_dangling_symlink_ancestor(tmp_path):
+    src = tmp_path / "src"
+    (src / "a").mkdir(parents=True)
+    b = src / "a" / "b.txt"
+    b.write_text("b")
+    trash = tmp_path / "trash"
+    (trash / "src").mkdir(parents=True)
+    (trash / "src" / "a").symlink_to(tmp_path / "nowhere")
+    with pytest.raises(FileExistsError, match="not a directory"):
+        delete_orphans(
+            [OrphanFile(path=b, rel="a/b.txt")],
+            trash_dir=trash,
+            results_dir_name="src",
+        )
+    assert b.exists()

@@ -55,6 +55,17 @@ def delete_orphans(
     if trash_dir is not None and results_dir_name is None:
         raise ValueError("results_dir_name is required when trash_dir is set")
     orphans = list(orphans)
+    if (
+        trash_dir is not None
+        and orphans
+        and (trash_dir.exists() or trash_dir.is_symlink())
+        and not trash_dir.is_dir()
+    ):
+        raise FileExistsError(
+            f"Refusing to move orphans to trash: {trash_dir} exists and is "
+            f"not a directory. Empty or rotate the trash directory, or "
+            f"choose another."
+        )
     checked_ancestors: set[Path] = set()
     for orphan in orphans:
         path = orphan.path
