@@ -366,9 +366,9 @@ def find_rule_patterns(
                     if on_warning is not None:
                         on_warning(
                             f"WARNING: dropping absolute path `{raw_path}` "
-                            f"from rule `{spec.name}`: it lies outside both "
-                            f"the workflow directory and the scanned results "
-                            f"directory, so no scanned file can match it."
+                            f"from rule `{spec.name}`: it does not lie under "
+                            f"the scanned results directory, so no scanned "
+                            f"file can match it."
                         )
                     continue
                 output_str = rewritten

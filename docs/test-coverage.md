@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **193 tests**, split across four files:
+As of this writing the suite is **199 tests**, split across four files:
 
 - `tests/test_patterns.py` (81) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (21) — does it find the right files on disk?
-- `tests/test_delete.py` (16) — does the deletion primitive refuse the things
+- `tests/test_delete.py` (18) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (75) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (79) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -121,6 +121,24 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
   computed once per scan (`test_extract_literal_prefix_*escaped_paren*`,
   `test_attribute_orphan_uses_precomputed_prefixes`).
 
+### Final-review fixes
+
+- Scanning the workflow directory itself may only be a dry run: `--delete` and
+  `--trash` are refused (exit 3) unless `--allow-basename-mismatch` is passed
+  (`test_cli_delete_refused_when_results_dir_is_workdir`,
+  `test_cli_delete_workdir_allowed_with_override`).
+- A file is live if it matches under the workdir-relative prefix *or* the
+  results-dir basename, so a `workdir:` directive the extractor cannot see does
+  not orphan relative outputs
+  (`test_cli_scan_workdir_directive_with_absolute_rule_keeps_relative_outputs`).
+- `--exclude-dir` must match the on-disk spelling, so `KEEP` for `keep/` is
+  refused instead of silently protecting nothing
+  (`test_cli_exclude_dir_wrong_case_refuses`).
+- A `--trash` path that is itself a file, and a dangling-symlink ancestor inside
+  the trash, are refused before anything moves
+  (`test_delete_orphans_trash_refuses_when_trash_dir_is_a_file`,
+  `test_delete_orphans_trash_refuses_dangling_symlink_ancestor`).
+
 ### Constraint syntax, `directory()` outputs and absolute paths
 
 Three classes of input used to produce *silent* false orphans and are now pinned:
@@ -159,8 +177,8 @@ genuinely mean it.
    even scan in that state unless you pass `--allow-empty-rules`.
 
 4. **The basename-mismatch guard.** If no rule writes under the directory you
-   targeted (matched by its path relative to the workflow workdir, basename when
-   outside it), that usually means you pointed at the wrong place.
+   targeted (matched by its path relative to the workflow workdir or by its
+   basename), that usually means you pointed at the wrong place.
    snakeprune refuses and tells you which prefixes the rules *do* write under,
    unless you pass `--allow-basename-mismatch`.
 
@@ -261,9 +279,9 @@ Two further tests pin the quiet, boring cases that a careful operator relies on:
 Trust comes from knowing the edges, so here are the gaps that remain:
 
 - **Case-insensitive filesystems** (e.g. default macOS) and **dotfiles**: the
-  matcher is case-sensitive and the walker includes dotfiles; neither is
-  exercised by a dedicated test, so behaviour there is by inspection rather than
-  by proof.
+  matcher is case-sensitive and the walker includes dotfiles; only the
+  `--exclude-dir` spelling check has a dedicated test, so the rest is by
+  inspection rather than by proof.
 
 None of these are believed to cause silent data loss today, but they are the
 honest next targets if you want the suite to be airtight.
