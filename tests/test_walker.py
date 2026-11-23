@@ -130,3 +130,19 @@ def test_attribute_orphan_uses_precomputed_prefixes(monkeypatch):
 ])
 def test_ignore_glob_semantics(rel, glob, expected):
     assert _matches_any_glob(rel, [glob]) is expected
+
+
+def test_iter_results_files_counts_skipped_symlinked_dirs_when_following(make_results, tmp_path):
+    results = make_results(["a.txt"])
+    external = tmp_path / "ext"
+    external.mkdir()
+    (external / "f.txt").write_text("f")
+    (results / "big").symlink_to(external)
+    target = tmp_path / "target.txt"
+    target.write_text("t")
+    (results / "link_file").symlink_to(target)
+    stats: dict = {}
+    rels = [rel for _, rel in iter_results_files(results, follow_symlinks=True, stats=stats)]
+    assert stats["skipped_symlinked_dirs"] == 1
+    assert "link_file" in rels
+    assert not any(r == "big" or r.startswith("big/") for r in rels)

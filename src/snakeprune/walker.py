@@ -62,8 +62,9 @@ def iter_results_files(
 
     If ``stats`` is provided, the walker initialises
     ``stats["skipped_symlinked_dirs"] = 0`` and increments it once per
-    directory entry that is a symlink to a directory and is being skipped
-    because ``follow_symlinks=False``. It likewise initialises
+    directory entry that is a symlink to a directory; such entries are never
+    descended into, whether or not ``follow_symlinks`` is set (which only
+    governs whether symlinked *files* are yielded). It likewise initialises
     ``stats["excluded_dirs"] = 0`` and increments it once per directory
     pruned by ``exclude_dirs``.
     """
@@ -90,14 +91,19 @@ def iter_results_files(
                     is_link = entry.is_symlink()
                 except OSError:
                     continue
-                if is_link and not follow_symlinks:
-                    if stats is not None:
-                        try:
-                            if entry.is_dir(follow_symlinks=True):
-                                stats["skipped_symlinked_dirs"] += 1
-                        except OSError:
-                            pass
-                    continue
+                if is_link:
+                    try:
+                        is_dir_link = entry.is_dir(follow_symlinks=True)
+                    except OSError:
+                        continue
+                    if is_dir_link:
+                        # Symlinked directories are never descended into, in
+                        # either mode; count them so the CLI can tell the user.
+                        if stats is not None:
+                            stats["skipped_symlinked_dirs"] += 1
+                        continue
+                    if not follow_symlinks:
+                        continue
                 try:
                     # Don't recurse into symlinked directories — preserves the
                     # prior `Path.rglob` default of not following dir symlinks

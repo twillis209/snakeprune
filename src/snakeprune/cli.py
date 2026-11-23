@@ -99,7 +99,7 @@ def scan(
     delete: bool = typer.Option(False, "--delete", help="Unlink orphans (default: dry-run only)."),
     rule_attribution: bool = typer.Option(False, "--rule-attribution", help="Show best-guess rule per orphan."),
     ignore: Optional[list[str]] = typer.Option(None, "--ignore", help="Glob pattern to skip; repeatable."),
-    follow_symlinks: bool = typer.Option(False, "--follow-symlinks", help="Follow symlinks (default: skip)."),
+    follow_symlinks: bool = typer.Option(False, "--follow-symlinks", help="Include symlinked files (symlinked directories are never descended into)."),
     allow_symlinks: bool = typer.Option(False, "--allow-symlinks", help="Allow deleting symlinks when --delete is set."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress messages on stderr."),
     allow_empty_rules: bool = typer.Option(

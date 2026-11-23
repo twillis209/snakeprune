@@ -341,6 +341,26 @@ def test_cli_scan_delete_prompt_proceeds_on_y(make_pipeline, make_results, monke
     assert not (results / "obsolete.csv").exists()
 
 
+def test_cli_follow_symlinks_reports_skipped_symlinked_dirs(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    external = tmp_path / "ext"
+    external.mkdir()
+    (external / "f.txt").write_text("f")
+    (results / "big").symlink_to(external)
+    target = tmp_path / "target.txt"
+    target.write_text("t")
+    (results / "link_file").symlink_to(target)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--follow-symlinks"])
+    assert result.exit_code == 0
+    combined = result.stdout + (result.stderr or "")
+    assert "Skipped 1 symlinked subdirectory" in combined
+
+
 def test_cli_scan_surfaces_skipped_symlinked_dirs(make_pipeline, make_results, tmp_path):
     pipeline = make_pipeline(
         "rule a:\n"
