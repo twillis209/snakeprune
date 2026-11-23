@@ -1,8 +1,10 @@
 import os
 import re
 
+import pytest
+
 from snakeprune.patterns import rule_literal_prefixes
-from snakeprune.walker import iter_results_files
+from snakeprune.walker import _matches_any_glob, iter_results_files
 
 
 def test_iter_results_files_basic(make_results):
@@ -114,3 +116,17 @@ def test_attribute_orphan_uses_precomputed_prefixes(monkeypatch):
 
     monkeypatch.setattr(walker, "extract_literal_prefix", boom)
     assert walker.attribute_orphan_to_rule("results/b/old.csv", pats, prefixes) == "b"
+
+
+@pytest.mark.parametrize("rel,glob,expected", [
+    ("sample.bam.bai", "**/*.bai", True),
+    ("a/b/sample.bam.bai", "**/*.bai", True),
+    ("a/b.txt", "a/**/b.txt", True),
+    ("a/x/y/b.txt", "a/**/b.txt", True),
+    ("sample.bam", "**/*.bai", False),
+    ("b/a/b.txt", "a/**/b.txt", False),
+    ("sub/x.txt", "sub/**", True),
+    ("a/b/c.log", "*.log", True),   # `*` still crosses `/`
+])
+def test_ignore_glob_semantics(rel, glob, expected):
+    assert _matches_any_glob(rel, [glob]) is expected

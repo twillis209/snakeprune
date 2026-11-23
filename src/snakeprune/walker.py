@@ -1,14 +1,31 @@
 """Walk a results directory and apply ignore/symlink filters."""
 from __future__ import annotations
 
+import itertools
 import os
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Iterable, Iterator
 
 
+def _expand_globs(globs: Iterable[str]) -> tuple[str, ...]:
+    """Each glob plus every variant with one or more ``**/`` occurrences removed,
+    so that ``**/`` also matches zero directories (``**/*.bai`` -> ``*.bai``)."""
+    out: dict[str, None] = {}
+    for g in globs:
+        parts = g.split("**/")
+        # Each separator between parts is either kept ("**/") or dropped ("").
+        for keep in itertools.product(("**/", ""), repeat=len(parts) - 1):
+            out[parts[0] + "".join(k + p for k, p in zip(keep, parts[1:]))] = None
+    return tuple(out)
+
+
+def _matches_expanded(rel_path: str, expanded: Iterable[str]) -> bool:
+    return any(fnmatchcase(rel_path, g) or _glob_matches_subdir(rel_path, g) for g in expanded)
+
+
 def _matches_any_glob(rel_path: str, globs: Iterable[str]) -> bool:
-    return any(fnmatchcase(rel_path, g) or _glob_matches_subdir(rel_path, g) for g in globs)
+    return _matches_expanded(rel_path, _expand_globs(globs))
 
 
 def _glob_matches_subdir(rel_path: str, glob: str) -> bool:
@@ -50,7 +67,7 @@ def iter_results_files(
     ``stats["excluded_dirs"] = 0`` and increments it once per directory
     pruned by ``exclude_dirs``.
     """
-    ignore_globs = tuple(ignore_globs)
+    ignore_globs = _expand_globs(ignore_globs)
     exclude_set = {os.path.abspath(p) for p in exclude_dirs}
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
@@ -101,7 +118,7 @@ def iter_results_files(
                 rel = full_path[base_len:]
                 if needs_sep_swap:
                     rel = rel.replace(sep, "/")
-                if ignore_globs and _matches_any_glob(rel, ignore_globs):
+                if ignore_globs and _matches_expanded(rel, ignore_globs):
                     continue
                 yield full_path, rel
 
