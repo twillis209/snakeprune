@@ -1237,3 +1237,17 @@ def test_cli_basename_guard_uses_match_prefix(make_pipeline):
     result = runner.invoke(app, ["scan", str(pipeline), str(qc)])
     assert result.exit_code == 3
     assert "No rule writes under `results/qc/`" in result.output
+
+
+def test_cli_scan_constraint_with_numeric_backref(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        r"""rule a:
+    output: r'results/{s,(a|b)\2}.txt'
+    shell: 'touch {output}'
+"""
+    )
+    results = make_results(["aa.txt", "stale.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "aa.txt" not in result.stdout
+    assert "stale.csv" in result.stdout

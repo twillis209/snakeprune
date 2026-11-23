@@ -881,3 +881,20 @@ def test_results_match_prefix(tmp_path):
     (q / "results").mkdir()
     (q / "workflow" / "Snakefile").write_text("")
     assert results_match_prefix(q, q / "results") == "results/"
+
+
+def test_combine_rule_patterns_keeps_numeric_backrefs_working():
+    pats = [("a", _compile(r"^results/(?P<s>(a|b)\2)\.txt$")),
+            ("b", _compile(r"^results/x/(?P<s>[^/]+)\.txt$"))]
+    combined = combine_rule_patterns(pats)
+    assert combined.match("results/aa.txt")
+    assert not combined.match("results/ab.txt")
+    assert combined.match("results/x/1.txt")
+
+
+def test_combine_rule_patterns_numeric_backrefs_do_not_cross_rules():
+    pats = [("a", _compile(r"^results/a/(?P<s>(x|y)\2)\.txt$")),
+            ("b", _compile(r"^results/b/(?P<s>(p|q)\2)\.txt$"))]
+    combined = combine_rule_patterns(pats)
+    assert combined.match("results/b/pp.txt")
+    assert not combined.match("results/b/pq.txt")

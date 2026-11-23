@@ -214,7 +214,11 @@ def scan(
                 err=True,
             )
             raise typer.Exit(code=3)
-    combined = combine_rule_patterns(patterns)
+    try:
+        combined = combine_rule_patterns(patterns)
+    except PatternError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=4)
 
     log(f"Walking {results_dir}...")
     orphans: list[OrphanFile] = []

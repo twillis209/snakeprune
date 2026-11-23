@@ -418,9 +418,29 @@ _NAMED_GROUP_OPEN_RE = re.compile(r"\(\?P<([A-Za-z_][A-Za-z_0-9]*)>")
 _NAMED_BACKREF_RE = re.compile(r"\(\?P=([A-Za-z_][A-Za-z_0-9]*)\)")
 
 
+# Over-inclusive on purpose: numeric backreferences (``\2``) and conditional
+# groups (``(?(1)...)``) depend on group numbering, which merging changes.
+_NUMBERED_GROUP_RE = re.compile(r"\\\d|\(\?\(")
+
+
+class CombinedPattern:
+    """Combined alternation plus patterns that cannot be merged safely."""
+
+    def __init__(
+        self, combined: re.Pattern | None, separate: list[re.Pattern]
+    ) -> None:
+        self._combined = combined
+        self._separate = separate
+
+    def match(self, target: str) -> bool:
+        if self._combined is not None and self._combined.match(target):
+            return True
+        return any(p.match(target) for p in self._separate)
+
+
 def combine_rule_patterns(
     patterns: list[tuple[str, re.Pattern]],
-) -> re.Pattern | None:
+) -> CombinedPattern | None:
     """Combine per-rule output regexes into a single anchored alternation.
 
     Returns ``None`` if ``patterns`` is empty.
@@ -436,13 +456,20 @@ def combine_rule_patterns(
       between repeated wildcards) are renamed with a per-pattern prefix and
       their backreferences updated to match.
 
+    Patterns using numeric backreferences or conditional groups are set aside
+    and matched individually, since merging renumbers capture groups.
+
     The match semantics are unchanged from running each input regex separately.
     """
     if not patterns:
         return None
     parts: list[str] = []
+    separate: list[re.Pattern] = []
     for i, (_, compiled) in enumerate(patterns):
         body = compiled.pattern
+        if _NUMBERED_GROUP_RE.search(body):
+            separate.append(compiled)
+            continue
         if body.startswith("^"):
             body = body[1:]
         if body.endswith("$"):
@@ -461,7 +488,13 @@ def combine_rule_patterns(
             lambda m: f"(?P={prefix}{m.group(1)})", body
         )
         parts.append(f"(?:{body})")
-    return re.compile("^(?:" + "|".join(parts) + ")$")
+    combined = None
+    if parts:
+        try:
+            combined = re.compile("^(?:" + "|".join(parts) + ")$")
+        except re.error as exc:
+            raise PatternError(f"cannot combine rule patterns: {exc}") from exc
+    return CombinedPattern(combined, separate)
 
 
 def rule_literal_prefixes(patterns: list[tuple[str, re.Pattern]]) -> list[tuple[str, str]]:
