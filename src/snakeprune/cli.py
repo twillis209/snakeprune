@@ -17,6 +17,7 @@ from snakeprune.patterns import (
     SnakefileNotFound,
     combine_rule_patterns,
     find_rule_patterns,
+    results_match_prefix,
     rule_literal_prefixes,
 )
 from snakeprune.walker import (
@@ -170,6 +171,7 @@ def scan(
 
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:
+        match_prefix = results_match_prefix(pipeline_dir, results_dir)
         patterns = find_rule_patterns(
             pipeline_dir,
             configfiles=tuple(configfile or ()),
@@ -178,6 +180,7 @@ def scan(
             ),
             on_warning=lambda msg: typer.echo(msg, err=True),
             results_dir=results_dir,
+            match_prefix=match_prefix,
         )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
@@ -197,7 +200,7 @@ def scan(
         raise typer.Exit(code=3)
     prefixes = rule_literal_prefixes(patterns)
     if patterns and not allow_basename_mismatch:
-        results_prefix = results_dir.name + "/"
+        results_prefix = match_prefix
         rule_prefixes = [prefix for _, prefix in prefixes]
         if not any(rp.startswith(results_prefix) for rp in rule_prefixes):
             # Surface up to 3 most common first-segments to help the user.
@@ -216,7 +219,7 @@ def scan(
     log(f"Walking {results_dir}...")
     orphans: list[OrphanFile] = []
     file_count = 0
-    target_prefix = results_dir.name + "/"
+    target_prefix = match_prefix
     walk_stats: dict = {}
     exclude_set: set[str] = set()
     for d in exclude_dir or ():

@@ -1167,3 +1167,73 @@ def test_cli_scan_dotdot_after_wildcard_exits_4(make_pipeline, make_results):
     )
     assert result.exit_code == 4
     assert (results / "stray.txt").exists()
+
+
+_NESTED_SNAKEFILE = (
+    "rule a:\n"
+    "    output: 'results/qc/{s}.txt'\n"
+    "    shell: 'touch {output}'\n"
+    "rule b:\n"
+    "    output: 'qc/{s}.html'\n"
+    "    shell: 'touch {output}'\n"
+)
+
+
+def _nested_qc(make_pipeline):
+    pipeline = make_pipeline(_NESTED_SNAKEFILE)
+    qc = pipeline / "results" / "qc"
+    qc.mkdir(parents=True)
+    (qc / "1.txt").touch()
+    (qc / "stale.csv").touch()
+    return pipeline, qc
+
+
+def test_cli_scan_nested_results_dir_uses_workdir_relative_path(make_pipeline):
+    pipeline, qc = _nested_qc(make_pipeline)
+    result = runner.invoke(app, ["scan", str(pipeline), str(qc)])
+    assert result.exit_code == 0
+    assert "1.txt" not in result.stdout
+    assert "stale.csv" in result.stdout
+
+
+def test_cli_scan_results_dir_via_symlink_matches(make_pipeline, tmp_path):
+    pipeline, qc = _nested_qc(make_pipeline)
+    link = tmp_path / "link"
+    link.symlink_to(qc)
+    result = runner.invoke(app, ["scan", str(pipeline), str(link)])
+    assert result.exit_code == 0
+    assert "1.txt" not in result.stdout
+    assert "stale.csv" in result.stdout
+
+
+def test_cli_scan_results_dir_equal_to_workdir(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (pipeline / "results").mkdir()
+    (pipeline / "results" / "1.txt").touch()
+    (pipeline / "results" / "stale.csv").touch()
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(pipeline),
+         "--ignore", "Snakefile", "--ignore", ".snakemake/**"],
+    )
+    assert result.exit_code == 0
+    assert "stale.csv" in result.stdout
+    assert "1.txt" not in result.stdout
+
+
+def test_cli_basename_guard_uses_match_prefix(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'other/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    qc = pipeline / "results" / "qc"
+    qc.mkdir(parents=True)
+    (qc / "x.txt").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(qc)])
+    assert result.exit_code == 3
+    assert "No rule writes under `results/qc/`" in result.output

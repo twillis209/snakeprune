@@ -280,13 +280,39 @@ def run_extractor(
     ]
 
 
-def _rewrite_under_results_dir(path: str, results_dir: Path | None) -> str | None:
-    """Rewrite an absolute `path` under `results_dir` to `<name>/<rel>`, else None."""
+def results_match_prefix(pipeline_dir: Path, results_dir: Path) -> str:
+    """Prefix under which scanned files are matched against rule patterns.
+
+    The results dir's path relative to the workflow workdir, plus `/` (empty
+    if they are the same directory). Both `abspath` and `realpath` forms of
+    each directory are paired, so symlinks on either side still match. Falls
+    back to `<results_dir.name>/` when the results dir is not under the workdir.
+    """
+    snakefile_dir = resolve_snakefile(pipeline_dir).parent
+    workdirs = [resolve_workdir(pipeline_dir)]
+    unresolved = snakefile_dir.parent if snakefile_dir.name == "workflow" else snakefile_dir
+    workdirs.append(Path(os.path.abspath(unresolved)))
+    results = [Path(os.path.abspath(results_dir)), Path(os.path.realpath(results_dir))]
+    for wd in workdirs:
+        for rd in results:
+            if rd == wd:
+                return ""
+            if wd in rd.parents:
+                return rd.relative_to(wd).as_posix() + "/"
+    return results_dir.name + "/"
+
+
+def _rewrite_under_results_dir(
+    path: str, results_dir: Path | None, match_prefix: str | None = None
+) -> str | None:
+    """Rewrite an absolute `path` under `results_dir` to `<match_prefix><rel>`, else None."""
     if results_dir is None:
         return None
+    if match_prefix is None:
+        match_prefix = results_dir.name + "/"
     for base in (os.path.abspath(results_dir), os.path.realpath(results_dir)):
         if path.startswith(base + "/"):
-            return results_dir.name + "/" + path[len(base) + 1 :]
+            return match_prefix + path[len(base) + 1 :]
     return None
 
 
@@ -296,6 +322,7 @@ def find_rule_patterns(
     default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
     on_warning: Callable[[str], None] | None = None,
     results_dir: Path | None = None,
+    match_prefix: str | None = None,
 ) -> list[tuple[str, re.Pattern]]:
     """Top-level: return one (rule_name, compiled_regex) per produced path.
 
@@ -307,7 +334,8 @@ def find_rule_patterns(
     Absolute paths the extractor could not relativise against the workdir are
     handled in one of two ways. If `results_dir` is given and the path lies
     under it (by `abspath` or `realpath`), it is rewritten to
-    `<results-dir-name>/<rel>` and used normally. Otherwise it can never match
+    `<match_prefix><rel>` (`match_prefix` defaults to `<results-dir-name>/`)
+    and used normally. Otherwise it can never match
     a scanned file; it is skipped and reported through `on_warning` (if given)
     so the user knows the live set is narrower than the workflow.
     """
@@ -331,7 +359,9 @@ def find_rule_patterns(
                     f"pattern would mark every file of this rule as an orphan."
                 )
             if output_str.startswith("/"):
-                rewritten = _rewrite_under_results_dir(output_str, results_dir)
+                rewritten = _rewrite_under_results_dir(
+                    output_str, results_dir, match_prefix
+                )
                 if rewritten is None:
                     if on_warning is not None:
                         on_warning(

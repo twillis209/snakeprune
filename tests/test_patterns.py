@@ -861,3 +861,23 @@ def test_find_rule_patterns_leading_dotdot_outside_results_is_dropped_with_warni
     assert patterns == []
     assert len(warnings) == 1
     assert "rule `a`" in warnings[0]
+
+
+def test_results_match_prefix(tmp_path):
+    from snakeprune.patterns import results_match_prefix
+
+    p = tmp_path / "p"
+    (p / "results" / "qc").mkdir(parents=True)
+    (p / "Snakefile").write_text("")
+    assert results_match_prefix(p, p / "results") == "results/"
+    assert results_match_prefix(p, p / "results" / "qc") == "results/qc/"
+    assert results_match_prefix(p, p) == ""
+    elsewhere = tmp_path / "elsewhere" / "out"
+    elsewhere.mkdir(parents=True)
+    assert results_match_prefix(p, elsewhere) == "out/"
+
+    q = tmp_path / "q"
+    (q / "workflow").mkdir(parents=True)
+    (q / "results").mkdir()
+    (q / "workflow" / "Snakefile").write_text("")
+    assert results_match_prefix(q, q / "results") == "results/"
