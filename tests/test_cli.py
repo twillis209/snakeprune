@@ -1466,3 +1466,33 @@ def test_cli_delete_workdir_allowed_with_override(make_pipeline):
          "--allow-basename-mismatch", "--allow-high-orphan-rate"],
     )
     assert _WORKDIR_REFUSAL not in result.output
+
+
+def test_cli_scan_workdir_directive_with_absolute_rule_keeps_relative_outputs(
+    make_pipeline, tmp_path
+):
+    pipeline_path = tmp_path / "pipeline"
+    abs_b = f"{pipeline_path}/run1/results/b/{{s}}.tsv"
+    pipeline = make_pipeline(
+        'workdir: "run1"\n'
+        "rule a:\n"
+        "    output: 'results/a/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        f"    output: '{abs_b}'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = pipeline / "run1" / "results"
+    for i in (1, 2, 3):
+        (results / "a").mkdir(parents=True, exist_ok=True)
+        (results / "a" / f"{i}.txt").touch()
+    for i in range(1, 8):
+        (results / "b").mkdir(parents=True, exist_ok=True)
+        (results / "b" / f"{i}.tsv").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    for i in (1, 2, 3):
+        assert f"a/{i}.txt" not in result.stdout
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    for i in (1, 2, 3):
+        assert (results / "a" / f"{i}.txt").exists()

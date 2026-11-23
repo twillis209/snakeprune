@@ -263,10 +263,17 @@ def scan(
         )
         raise typer.Exit(code=3)
     prefixes = rule_literal_prefixes(patterns)
+    # The workflow may have run in a different directory than the extractor
+    # assumed (`workdir:` / `-d`), so a file is also live if it matches under
+    # the results-dir basename.
+    basename_prefix = results_dir.name + "/"
     if patterns and not allow_basename_mismatch:
         results_prefix = match_prefix
         rule_prefixes = [prefix for _, prefix in prefixes]
-        if not any(rp.startswith(results_prefix) for rp in rule_prefixes):
+        if not any(
+            rp.startswith(results_prefix) or rp.startswith(basename_prefix)
+            for rp in rule_prefixes
+        ):
             # Surface up to 3 most common first-segments to help the user.
             from collections import Counter
             first_segs = Counter(rp.split("/", 1)[0] + "/" for rp in rule_prefixes if rp)
@@ -287,7 +294,9 @@ def scan(
     log(f"Walking {results_dir}...")
     orphans: list[OrphanFile] = []
     file_count = 0
-    target_prefix = match_prefix
+    target_prefixes = [match_prefix]
+    if basename_prefix != match_prefix:
+        target_prefixes.append(basename_prefix)
     walk_stats: dict = {}
     for full_path, rel in iter_results_files(
         results_dir,
@@ -301,10 +310,15 @@ def scan(
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
-        match_target = target_prefix + rel
-        if combined is not None and combined.match(match_target):
+        targets = [tp + rel for tp in target_prefixes]
+        if combined is not None and any(combined.match(t) for t in targets):
             continue
-        likely = attribute_orphan_to_rule(match_target, patterns, prefixes) if rule_attribution else None
+        likely = None
+        if rule_attribution:
+            for t in targets:
+                likely = attribute_orphan_to_rule(t, patterns, prefixes)
+                if likely:
+                    break
         orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
 
