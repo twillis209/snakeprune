@@ -4,12 +4,14 @@ Find 'orphan' files in a `snakemake` project's `results/` directory and delete t
 
 ## Motivation
 
+Experimentation in bioinformatics typically entails exploration of an ever-expanding number of parameters, flags, procedures, etc. 
+
 When developing a `snakemake` pipeline, I usually write and run rules iteratively, updating the output path with more and more wildcards such that I end up with many versions of a rule's output files, e.g.
 * `results/{sample}/{replicate}/output.txt` becomes
 * `results/{sample}/{replicate}/{normalisation}/output.txt` becomes
 * `results/{sample}/{replicate}/{normalisation}/{count_threshold}/output.txt`
 
-...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time. To my knowledge `snakemake` provides no way of cleaning these files up.
+...and so on. If I settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files, say, one per human gene, multiple iterations clutter up your filesystem over time and stir the bloodlust of your HPC team. To my knowledge `snakemake` provides no way of cleaning these files up.
 
 `snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per file a rule produces (its `output`, `log`, and `benchmark` paths), walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
@@ -107,7 +109,7 @@ snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yam
 
 ### Limitations
 
-- **`--exclude-dir` vs `--ignore`:** `--exclude-dir DIR` prunes a whole subtree from the walk (the directory is never descended into), which is faster than `--ignore "DIR/**"` for large directories you want to protect. `--ignore` remains for file-level glob filtering. Each value must be an existing, non-symlink directory strictly inside the results directory, spelled exactly as on disk, or the scan is refused (exit 3); relative paths resolve against the results directory, not the current directory.
+- **`--exclude-dir` vs `--ignore`:** `--exclude-dir DIR` prunes a whole subtree from the walk (the directory is never descended into), which is faster than `--ignore "DIR/**"` for large directories you want to protect. `--ignore` remains for file-level glob filtering. Each value must be an existing, non-symlink directory strictly inside the results directory, spelled exactly as on disk and not reached through a symlinked parent, or the scan is refused (exit 3); relative paths resolve against the results directory, not the current directory.
 - **`--ignore` globs.** `*` crosses `/`, and `**/` also matches zero directories, so `--ignore "**/*.bai"` covers `.bai` files at the top level as well as nested ones.
 - **Nested results directories.** Scanned files are matched against rule patterns by the results directory's path relative to the workflow's working directory (the Snakefile's directory, or its parent for `workflow/Snakefile`), e.g. `results/qc/a.txt` for `path/to/results/qc`. A file is also live if it matches under the results directory's basename (e.g. `results/qc/a.txt` and `qc/a.txt` for the example above), because the workflow may have run in a different directory than the one snakeprune assumes (`workdir:` directive, `snakemake -d`). If the results directory is outside the working directory, only the basename is used. Scanning a sub-directory such as `results/qc` when the rules' literal prefix is shorter (e.g. `results/{d}/x.txt`) therefore trips the "No rule writes under" guard and needs `--allow-basename-mismatch`.
 - **`print()` in Snakefiles is fine.** Anything the workflow (or its child processes) writes to stdout is diverted to stderr so it cannot corrupt the extractor's JSON.

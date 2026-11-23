@@ -134,6 +134,17 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
 - `--exclude-dir` must match the on-disk spelling, so `KEEP` for `keep/` is
   refused instead of silently protecting nothing
   (`test_cli_exclude_dir_wrong_case_refuses`).
+- `--exclude-dir` reached through a symlinked parent directory is refused, since
+  the walk reaches those files by their real path
+  (`test_cli_exclude_dir_through_symlinked_parent_refuses`).
+- A results directory spelled `.`, `..` or `x/..` is treated by its real name:
+  trash targets stay inside the trash directory and the naughty-directory guard
+  still fires (`test_cli_scan_trash_stays_inside_trash_when_results_dir_ends_in_dotdot`,
+  `test_cli_scan_naughty_dir_spelled_as_dot_still_refuses`).
+- `--trash` inside the results tree is detected by file identity, so another
+  letter case on a case-insensitive filesystem is refused
+  (`test_cli_scan_trash_inside_results_via_other_letter_case_refuses`; skipped
+  on case-sensitive filesystems).
 - A `--trash` path that is itself a file, and a dangling-symlink ancestor inside
   the trash, are refused before anything moves
   (`test_delete_orphans_trash_refuses_when_trash_dir_is_a_file`,

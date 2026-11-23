@@ -55,7 +55,8 @@ def _resolve_exclude_dirs(results_dir: Path, values: Sequence[str]) -> list[str]
     walker compares against: ``abspath(join(results_dir, rel))``.
 
     Each value must name an existing, non-symlink directory strictly inside
-    ``results_dir`` (lexically or after symlink resolution).
+    ``results_dir`` (lexically or after symlink resolution), spelled as on
+    disk, with no symlinked directory between ``results_dir`` and it.
     """
     out: list[str] = []
     base = os.fspath(results_dir)
@@ -198,6 +199,7 @@ def scan(
         "--exclude-dir",
         help="Directory subtree to skip entirely; repeatable. Must be an "
              "existing, non-symlink directory strictly inside results_dir, "
+             "not reached through a symlinked parent, "
              "else the scan is refused (exit 3). Relative paths resolve "
              "against results_dir, not the current directory.",
     ),
