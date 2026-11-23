@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **144 tests**, split across four files:
+As of this writing the suite is **193 tests**, split across four files:
 
-- `tests/test_patterns.py` (61) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (81) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
-- `tests/test_walker.py` (11) — does it find the right files on disk?
-- `tests/test_delete.py` (14) — does the deletion primitive refuse the things
+- `tests/test_walker.py` (21) — does it find the right files on disk?
+- `tests/test_delete.py` (16) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (58) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (75) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -84,7 +84,42 @@ default**. A symlink is only ever visited if you explicitly pass
 walker counts and surfaces how many it skipped so a silently-unscanned subtree
 cannot hide from you. The `--exclude-dir` option prunes whole subtrees from the
 scan, and that pruning is tested for relative paths, absolute paths,
-non-existent paths (a no-op, not an error), and the reported tally.
+the reported tally, and the refusals (exit 3) for values that do not exist,
+are files, are symlinks, lie outside the results directory, or are the results
+directory itself (`test_cli_exclude_dir_*`). `--ignore` glob semantics are
+parametrised (`test_ignore_glob_semantics`): `*` crosses `/`, and `**/` also
+matches zero directories, so `**/*.bai` covers top-level files. Symlinked
+directories are counted and reported with and without `--follow-symlinks`
+(`test_iter_results_files_counts_skipped_symlinked_dirs_when_following`,
+`test_cli_follow_symlinks_reports_skipped_symlinked_dirs`).
+
+### Rule-path normalisation, nested results directories and extractor stdout
+
+Round 2 of review fixes closed several more silent-false-orphan paths:
+
+- Rule paths with `./`, `//`, a trailing `/` or `seg/..` are normalised
+  (`test_normalise_rule_path`, `test_cli_scan_unnormalised_rule_paths_are_live`);
+  a leading `..` resolves against the workdir, and a `..` after a wildcard
+  segment is refused with exit 4
+  (`test_find_rule_patterns_refuses_dotdot_after_wildcard`,
+  `test_cli_scan_dotdot_after_wildcard_exits_4`).
+- Scanned files are matched by the results directory's path relative to the
+  workflow workdir, including via a symlinked results dir, a results dir equal
+  to the workdir, and the basename fallback (`test_results_match_prefix`,
+  `test_cli_scan_nested_results_dir_uses_workdir_relative_path`,
+  `test_cli_scan_results_dir_via_symlink_matches`,
+  `test_cli_scan_results_dir_equal_to_workdir`,
+  `test_cli_basename_guard_uses_match_prefix`).
+- Constraints with numeric backreferences stay correct when rule patterns are
+  combined (`test_combine_rule_patterns_*backrefs*`,
+  `test_cli_scan_constraint_with_numeric_backref`).
+- A Snakefile that prints, including from a child process, no longer corrupts
+  the extractor's JSON (`test_run_extractor_tolerates_print_in_snakefile`,
+  `test_run_extractor_tolerates_child_process_stdout`,
+  `test_cli_scan_with_print_in_snakefile`).
+- A literal prefix is no longer cut at an escaped `\(`, and rule prefixes are
+  computed once per scan (`test_extract_literal_prefix_*escaped_paren*`,
+  `test_attribute_orphan_uses_precomputed_prefixes`).
 
 ### Constraint syntax, `directory()` outputs and absolute paths
 
@@ -123,8 +158,9 @@ genuinely mean it.
    patterns, every file would be reported as an orphan. snakeprune refuses to
    even scan in that state unless you pass `--allow-empty-rules`.
 
-4. **The basename-mismatch guard.** If no rule writes under the basename of the
-   directory you targeted, that usually means you pointed at the wrong place.
+4. **The basename-mismatch guard.** If no rule writes under the directory you
+   targeted (matched by its path relative to the workflow workdir, basename when
+   outside it), that usually means you pointed at the wrong place.
    snakeprune refuses and tells you which prefixes the rules *do* write under,
    unless you pass `--allow-basename-mismatch`.
 
@@ -173,7 +209,10 @@ genuinely mean it.
    already left a file at the same path in the trash, the move is refused (exit
    3) rather than silently overwriting it — otherwise the safety net would quietly
    destroy your earlier recovery copy, which is exactly the failure the trash is
-   meant to prevent. Like the deletion guards, this collision check runs in the
+   meant to prevent. The same pre-flight pass refuses when a parent of a target
+   exists as a non-directory (`test_delete_orphans_trash_refuses_when_ancestor_is_a_file`,
+   `test_cli_trash_ancestor_file_refuses_with_exit_3`; an existing directory
+   parent is allowed). Like the deletion guards, this collision check runs in the
    all-or-nothing pre-flight pass, so one colliding orphan aborts the whole batch
    before anything has moved.
 
