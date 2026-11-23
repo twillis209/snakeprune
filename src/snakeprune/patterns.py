@@ -280,6 +280,19 @@ def run_extractor(
     ]
 
 
+def results_dir_name(results_dir: Path) -> str:
+    """Directory name of `results_dir`, even when spelled `.`, `..` or `x/..`.
+
+    `Path.name` is empty for `.` and `..` for a path ending in `..`; those
+    would defeat name-based guards and let a trash target climb out of the
+    trash directory, so they are resolved to the real directory's name.
+    """
+    name = results_dir.name
+    if name in ("", ".", ".."):
+        name = Path(os.path.realpath(results_dir)).name
+    return name
+
+
 def results_match_prefix(pipeline_dir: Path, results_dir: Path) -> str:
     """Prefix under which scanned files are matched against rule patterns.
 
@@ -299,7 +312,7 @@ def results_match_prefix(pipeline_dir: Path, results_dir: Path) -> str:
                 return ""
             if wd in rd.parents:
                 return rd.relative_to(wd).as_posix() + "/"
-    return results_dir.name + "/"
+    return results_dir_name(results_dir) + "/"
 
 
 def _rewrite_under_results_dir(
@@ -315,7 +328,7 @@ def _rewrite_under_results_dir(
     if results_dir is None:
         return None
     if match_prefix is None:
-        match_prefix = results_dir.name + "/"
+        match_prefix = results_dir_name(results_dir) + "/"
     cut = path.find("{")
     literal = path if cut == -1 else path[:cut]
     literal_dir = literal[: literal.rfind("/")]

@@ -1517,3 +1517,76 @@ def test_cli_exclude_dir_wrong_case_refuses(make_pipeline, make_results):
     assert (results / "keep" / "x.csv").exists()
     if os.path.exists(results / "KEEP"):
         assert "on-disk spelling" in result.output
+
+
+def test_cli_exclude_dir_through_symlinked_parent_refuses(make_pipeline, make_results):
+    # `a` is a symlink to `b`: the walk reaches the files as b/c/..., so an
+    # exclusion spelled a/c would silently protect nothing.
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["1.txt", "b/c/keep.dat"])
+    (results / "a").symlink_to("b")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--exclude-dir", "a/c"]
+    )
+    _assert_refused(result, "symlink")
+
+
+def test_cli_scan_trash_stays_inside_trash_when_results_dir_ends_in_dotdot(
+    make_pipeline, make_results, tmp_path
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "2.txt", "3.txt", "orphan.csv", "sub/.keep"])
+    trash = tmp_path / "bin" / "trash"
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results / "sub" / ".."), "--trash", str(trash),
+         "--yes", "--ignore", "sub/**"],
+    )
+    assert result.exit_code == 0, result.output
+    assert (trash / "results" / "orphan.csv").exists()
+    assert not (tmp_path / "bin" / "orphan.csv").exists()
+
+
+def test_cli_scan_naughty_dir_spelled_as_dot_still_refuses(
+    make_pipeline, tmp_path, monkeypatch
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'config/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in ("1.txt", "2.txt", "3.txt", "settings.yaml"):
+        (config / name).touch()
+    monkeypatch.chdir(config)
+    result = runner.invoke(app, ["scan", str(pipeline), ".", "--delete", "--yes"])
+    assert result.exit_code == 3, result.output
+    assert "--allow-naughty-dir" in result.output
+    assert (config / "settings.yaml").exists()
+
+
+def test_cli_scan_trash_inside_results_via_other_letter_case_refuses(
+    make_pipeline, make_results
+):
+    import pytest
+
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "2.txt", "3.txt", "orphan.csv"])
+    shouted = results.parent / "RESULTS"
+    if not shouted.exists():
+        pytest.skip("filesystem is case-sensitive")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--trash", str(shouted / "tr"), "--yes"]
+    )
+    assert result.exit_code == 3, result.output
+    assert "--trash" in result.output
+    assert (results / "orphan.csv").exists()

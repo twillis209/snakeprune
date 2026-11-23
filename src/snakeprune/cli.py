@@ -17,6 +17,7 @@ from snakeprune.patterns import (
     SnakefileNotFound,
     combine_rule_patterns,
     find_rule_patterns,
+    results_dir_name,
     results_match_prefix,
     rule_literal_prefixes,
 )
@@ -85,8 +86,42 @@ def _resolve_exclude_dirs(results_dir: Path, values: Sequence[str]) -> list[str]
                     "does not match the on-disk spelling of any directory (check letter case)",
                 )
             parent = os.path.join(parent, part)
+            # The walk never passes through a symlinked directory, so it
+            # reaches these files by another path that this would not exclude.
+            if os.path.islink(parent):
+                raise ExcludeDirError(
+                    value, target,
+                    f"is reached through the symlink `{parent}`; name the "
+                    "directory by its real path",
+                )
         out.append(target)
     return out
+
+
+def _is_inside(path: Path, directory: Path) -> bool:
+    """Whether ``path`` (which need not exist) is ``directory`` or lies in it.
+
+    Compares by file identity as well as by spelling, so a symlink or (on a
+    case-insensitive filesystem) a different letter case cannot hide it.
+    """
+    for form, dir_form in (
+        (os.path.abspath(path), os.path.abspath(directory)),
+        (os.path.realpath(path), os.path.realpath(directory)),
+    ):
+        if form == dir_form or form.startswith(dir_form.rstrip(os.sep) + os.sep):
+            return True
+        current = form
+        while True:
+            try:
+                if os.path.samefile(current, directory):
+                    return True
+            except OSError:
+                pass
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+    return False
 
 
 def _stdin_isatty() -> bool:
@@ -191,16 +226,7 @@ def scan(
         raise typer.Exit(code=3)
 
     if trash is not None:
-        # Compare both lexical and symlink-resolved forms so a symlinked
-        # results dir cannot be bypassed via its real path (or vice versa).
-        inside = any(
-            t == r or t.startswith(r + os.sep)
-            for t, r in (
-                (os.path.abspath(trash), os.path.abspath(results_dir)),
-                (os.path.realpath(trash), os.path.realpath(results_dir)),
-            )
-        )
-        if inside:
+        if _is_inside(trash, results_dir):
             typer.echo(
                 "Refusing to delete: --trash must not be inside the results "
                 "directory being scanned. The next scan would report the "
@@ -210,10 +236,11 @@ def scan(
             )
             raise typer.Exit(code=3)
 
+    results_name = results_dir_name(results_dir)
     naughty = DEFAULT_NAUGHTY_DIRS | set(naughty_dir or ())
-    if results_dir.name in naughty:
+    if results_name in naughty:
         typer.echo(
-            f"WARNING: `{results_dir.name}` is a conventional Snakemake "
+            f"WARNING: `{results_name}` is a conventional Snakemake "
             f"input/config directory and is unlikely to contain prunable rule "
             f"outputs. Review the orphan list carefully — this may be the wrong "
             f"target.",
@@ -221,7 +248,7 @@ def scan(
         )
         if (delete or trash is not None) and not allow_naughty_dir:
             typer.echo(
-                f"Refusing to delete: `{results_dir.name}` looks like a "
+                f"Refusing to delete: `{results_name}` looks like a "
                 f"Snakemake input/config directory. Pass --allow-naughty-dir "
                 f"to override.",
                 err=True,
@@ -276,7 +303,7 @@ def scan(
     # The workflow may have run in a different directory than the extractor
     # assumed (`workdir:` / `-d`), so a file is also live if it matches under
     # the results-dir basename.
-    basename_prefix = results_dir.name + "/"
+    basename_prefix = results_name + "/"
     if patterns and not allow_basename_mismatch:
         results_prefix = match_prefix
         rule_prefixes = [prefix for _, prefix in prefixes]
@@ -404,7 +431,7 @@ def scan(
                 orphans,
                 allow_symlinks=allow_symlinks,
                 trash_dir=trash,
-                results_dir_name=results_dir.name if trash is not None else None,
+                results_dir_name=results_name if trash is not None else None,
             )
         except DeletionFailed as exc:
             typer.echo(str(exc), err=True)
