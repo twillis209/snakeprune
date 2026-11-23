@@ -255,3 +255,40 @@ def test_delete_orphans_trash_mid_batch_failure_reports_progress(tmp_path, monke
     assert exc.value.completed == 1
     assert (trash / "src" / "a.txt").exists()
     assert b.exists()
+
+
+def test_delete_orphans_trash_refuses_when_ancestor_is_a_file(tmp_path):
+    src = tmp_path / "src"
+    (src / "a").mkdir(parents=True)
+    z = src / "z.txt"
+    z.write_text("z")
+    b = src / "a" / "b.txt"
+    b.write_text("b")
+    trash = tmp_path / "trash"
+    (trash / "src").mkdir(parents=True)
+    (trash / "src" / "a").write_text("blocker")
+    with pytest.raises(FileExistsError, match="not a directory"):
+        delete_orphans(
+            [OrphanFile(path=z, rel="z.txt"), OrphanFile(path=b, rel="a/b.txt")],
+            trash_dir=trash,
+            results_dir_name="src",
+        )
+    assert z.exists()
+    assert b.exists()
+    assert not (trash / "src" / "z.txt").exists()
+
+
+def test_delete_orphans_trash_allows_existing_ancestor_directory(tmp_path):
+    src = tmp_path / "src"
+    (src / "a").mkdir(parents=True)
+    b = src / "a" / "b.txt"
+    b.write_text("b")
+    trash = tmp_path / "trash"
+    (trash / "src" / "a").mkdir(parents=True)
+    delete_orphans(
+        [OrphanFile(path=b, rel="a/b.txt")],
+        trash_dir=trash,
+        results_dir_name="src",
+    )
+    assert not b.exists()
+    assert (trash / "src" / "a" / "b.txt").read_text() == "b"

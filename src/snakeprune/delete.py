@@ -55,6 +55,7 @@ def delete_orphans(
     if trash_dir is not None and results_dir_name is None:
         raise ValueError("results_dir_name is required when trash_dir is set")
     orphans = list(orphans)
+    checked_ancestors: set[Path] = set()
     for orphan in orphans:
         path = orphan.path
         if path.is_dir() and not path.is_symlink():
@@ -72,6 +73,18 @@ def delete_orphans(
                     f"exists. Empty or rotate the trash directory, or choose "
                     f"another."
                 )
+            for ancestor in target.parents:
+                if ancestor == trash_dir:
+                    break
+                if ancestor in checked_ancestors:
+                    break  # this and every higher ancestor already verified
+                if (ancestor.exists() or ancestor.is_symlink()) and not ancestor.is_dir():
+                    raise FileExistsError(
+                        f"Refusing to move {path} to trash: {ancestor} exists "
+                        f"and is not a directory. Empty or rotate the trash "
+                        f"directory, or choose another."
+                    )
+                checked_ancestors.add(ancestor)
     total = len(orphans)
     for completed, orphan in enumerate(orphans):
         path = orphan.path

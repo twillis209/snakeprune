@@ -1388,3 +1388,30 @@ def test_cli_exclude_dir_realpath_under_symlinked_results_prunes(
     assert result.exit_code == 0
     assert "keep/x.csv" not in result.stdout
     assert "Excluded 1 directory" in (result.stderr or "")
+
+
+def test_cli_trash_ancestor_file_refuses_with_exit_3(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["z.csv", "a/b.csv"])
+    trash = tmp_path / "trash"
+    blocker = trash / results.name / "a"
+    blocker.parent.mkdir(parents=True)
+    blocker.write_text("blocker")
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--trash", str(trash), "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    assert result.exit_code == 3
+    combined = result.stdout + (result.stderr or "")
+    assert "not a directory" in combined
+    assert (results / "z.csv").exists()
+    assert (results / "a" / "b.csv").exists()
+    assert not (trash / results.name / "z.csv").exists()
+    assert blocker.read_text() == "blocker"
