@@ -15,10 +15,10 @@ Experimentation in bioinformatics typically entails exploration of an ever-expan
 
 ## Install
 
-`snakeprune` itself is a small pure-Python CLI. The recommended install is via [`pipx`](https://pipx.pypa.io/) so it lives in its own isolated env and works against any workflow:
+`snakeprune` itself is a small pure-Python CLI. It is not on PyPI; install it straight from GitHub. The recommended way is [`pipx`](https://pipx.pypa.io/), so it lives in its own isolated env and works against any workflow:
 
 ```bash
-pipx install snakeprune
+pipx install git+https://github.com/twillis209/snakeprune.git
 ```
 
 Or, to install from a clone:
