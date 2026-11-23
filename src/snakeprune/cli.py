@@ -227,6 +227,15 @@ def scan(
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:
         match_prefix = results_match_prefix(pipeline_dir, results_dir)
+        if match_prefix == "" and (delete or trash is not None) and not allow_basename_mismatch:
+            typer.echo(
+                "Refusing to delete: the scanned directory is the workflow's "
+                "working directory, so the Snakefile, config and inputs would "
+                "be listed as orphans. Scan the results directory instead, or "
+                "pass --allow-basename-mismatch to override.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
         patterns = find_rule_patterns(
             pipeline_dir,
             configfiles=tuple(configfile or ()),

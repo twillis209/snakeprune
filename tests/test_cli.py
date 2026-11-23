@@ -1415,3 +1415,54 @@ def test_cli_trash_ancestor_file_refuses_with_exit_3(make_pipeline, make_results
     assert (results / "a" / "b.csv").exists()
     assert not (trash / results.name / "z.csv").exists()
     assert blocker.read_text() == "blocker"
+
+
+_WORKDIR_REFUSAL = "the scanned directory is the workflow's working directory"
+
+
+def _workdir_pipeline(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (pipeline / "results").mkdir()
+    for i in range(1, 9):
+        (pipeline / "results" / f"{i}.txt").touch()
+    (pipeline / "resources").mkdir()
+    (pipeline / "resources" / "genome.fa").touch()
+    (pipeline / "config").mkdir()
+    (pipeline / "config" / "config.yaml").touch()
+    return pipeline
+
+
+def _assert_workdir_intact(pipeline):
+    assert (pipeline / "Snakefile").exists()
+    assert (pipeline / "resources" / "genome.fa").exists()
+    assert (pipeline / "config" / "config.yaml").exists()
+
+
+def test_cli_delete_refused_when_results_dir_is_workdir(make_pipeline, tmp_path):
+    pipeline = _workdir_pipeline(make_pipeline)
+    result = runner.invoke(app, ["scan", str(pipeline), str(pipeline), "--delete", "--yes"])
+    assert result.exit_code == 3
+    assert _WORKDIR_REFUSAL in result.output
+    _assert_workdir_intact(pipeline)
+    trash = tmp_path / "trash"
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(pipeline), "--trash", str(trash), "--yes"]
+    )
+    assert result.exit_code == 3
+    assert _WORKDIR_REFUSAL in result.output
+    _assert_workdir_intact(pipeline)
+    assert not trash.exists()
+
+
+def test_cli_delete_workdir_allowed_with_override(make_pipeline):
+    pipeline = _workdir_pipeline(make_pipeline)
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(pipeline), "--delete", "--yes",
+         "--allow-basename-mismatch", "--allow-high-orphan-rate"],
+    )
+    assert _WORKDIR_REFUSAL not in result.output
