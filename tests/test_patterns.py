@@ -922,3 +922,31 @@ def test_run_extractor_tolerates_child_process_stdout(make_pipeline):
     )
     specs = run_extractor(pipeline)
     assert [s.name for s in specs] == ["a"]
+
+
+def test_find_rule_patterns_maps_absolute_path_spelled_through_symlink(make_pipeline, tmp_path):
+    from snakeprune.patterns import find_rule_patterns
+    # Safety: a rule's absolute path that reaches the results dir through a
+    # symlinked spelling (/tmp vs /private/tmp, a symlinked /scratch) must
+    # still be recognised as under it, or all of that rule's files are listed.
+    real = tmp_path / "real"
+    results = real / "results"
+    results.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '" + str(link) + "/results/sub/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        "    output: '" + str(link) + "/results/static.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    warnings: list[str] = []
+    patterns = find_rule_patterns(
+        pipeline, on_warning=warnings.append, results_dir=results
+    )
+    assert warnings == []
+    assert len(patterns) == 2
+    assert any(p.match("results/sub/1.txt") for _, p in patterns)
+    assert any(p.match("results/static.txt") for _, p in patterns)

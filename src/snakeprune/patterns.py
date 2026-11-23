@@ -305,14 +305,26 @@ def results_match_prefix(pipeline_dir: Path, results_dir: Path) -> str:
 def _rewrite_under_results_dir(
     path: str, results_dir: Path | None, match_prefix: str | None = None
 ) -> str | None:
-    """Rewrite an absolute `path` under `results_dir` to `<match_prefix><rel>`, else None."""
+    """Rewrite an absolute `path` under `results_dir` to `<match_prefix><rel>`, else None.
+
+    The path is tried as written and with the directory part of its literal
+    prefix (everything before the first wildcard) symlink-resolved, so a rule
+    path spelled through a symlink (`/tmp` vs `/private/tmp`, a symlinked
+    `/scratch`) is still recognised as lying under the results dir.
+    """
     if results_dir is None:
         return None
     if match_prefix is None:
         match_prefix = results_dir.name + "/"
-    for base in (os.path.abspath(results_dir), os.path.realpath(results_dir)):
-        if path.startswith(base + "/"):
-            return match_prefix + path[len(base) + 1 :]
+    cut = path.find("{")
+    literal = path if cut == -1 else path[:cut]
+    literal_dir = literal[: literal.rfind("/")]
+    resolved = os.path.realpath(literal_dir or "/").rstrip("/") + path[len(literal_dir) :]
+    bases = (os.path.abspath(results_dir), os.path.realpath(results_dir))
+    for candidate in dict.fromkeys((path, resolved)):
+        for base in bases:
+            if candidate.startswith(base + "/"):
+                return match_prefix + candidate[len(base) + 1 :]
     return None
 
 
