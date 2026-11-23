@@ -105,6 +105,60 @@ def resolve_snakefile(pipeline_dir: Path) -> Path:
     )
 
 
+def resolve_workdir(pipeline_dir: Path) -> Path:
+    """Working directory Snakemake would use for `pipeline_dir`'s Snakefile.
+
+    Mirrors `_extract._resolve_workdir`: the parent of the Snakefile's
+    directory if that directory is named `workflow`, else the Snakefile's
+    directory. Raises `SnakefileNotFound` if there is no Snakefile.
+    """
+    parent = resolve_snakefile(pipeline_dir).resolve().parent
+    return parent.parent if parent.name == "workflow" else parent
+
+
+def _split_outside_wildcards(path: str) -> list[str]:
+    """Split `path` on `/`, never inside a `{name,constraint}` wildcard token."""
+    segments: list[str] = []
+    cursor = 0
+    start = 0
+    for match in _WILDCARD_RE.finditer(path):
+        for i in range(cursor, match.start()):
+            if path[i] == "/":
+                segments.append(path[start:i])
+                start = i + 1
+        cursor = match.end()
+    for i in range(cursor, len(path)):
+        if path[i] == "/":
+            segments.append(path[start:i])
+            start = i + 1
+    segments.append(path[start:])
+    return segments
+
+
+def normalise_rule_path(path: str) -> tuple[str, bool]:
+    """Normalise `./`, `//`, a trailing `/` and collapsible `..` in a rule path.
+
+    Returns `(normalised, has_dotdot)`. A `seg/..` pair collapses only when
+    `seg` contains no wildcard (its value is unknown, so what it names is too)
+    and is not itself `..`; every other `..` stays verbatim and sets the flag.
+    """
+    absolute = path.startswith("/")
+    stack: list[str] = []
+    for seg in _split_outside_wildcards(path):
+        if seg in ("", "."):
+            continue
+        if (
+            seg == ".."
+            and stack
+            and stack[-1] != ".."
+            and not _WILDCARD_RE.search(stack[-1])
+        ):
+            stack.pop()
+        else:
+            stack.append(seg)
+    return ("/" if absolute else "") + "/".join(stack), ".." in stack
+
+
 from dataclasses import dataclass, field
 
 
@@ -264,12 +318,24 @@ def find_rule_patterns(
     for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
         for output_str in spec.outputs:
             is_directory = output_str in spec.directories
+            raw_path = output_str
+            output_str, dotdot = normalise_rule_path(output_str)
+            if dotdot and output_str.startswith("../"):
+                output_str, dotdot = normalise_rule_path(
+                    str(resolve_workdir(pipeline_dir)) + "/" + output_str
+                )
+            if dotdot:
+                raise PatternError(
+                    f"Cannot resolve `..` in rule `{spec.name}` path "
+                    f"`{raw_path}`. snakeprune refuses to guess: a wrong "
+                    f"pattern would mark every file of this rule as an orphan."
+                )
             if output_str.startswith("/"):
                 rewritten = _rewrite_under_results_dir(output_str, results_dir)
                 if rewritten is None:
                     if on_warning is not None:
                         on_warning(
-                            f"WARNING: dropping absolute path `{output_str}` "
+                            f"WARNING: dropping absolute path `{raw_path}` "
                             f"from rule `{spec.name}`: it lies outside both "
                             f"the workflow directory and the scanned results "
                             f"directory, so no scanned file can match it."

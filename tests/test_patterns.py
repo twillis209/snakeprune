@@ -788,3 +788,76 @@ def test_find_rule_patterns_maps_absolute_path_under_results_dir(make_pipeline, 
     assert len(patterns) == 1
     assert patterns[0][1].match("results/1.txt")
     assert warnings == []
+
+
+from snakeprune.patterns import PatternError, normalise_rule_path, resolve_workdir
+
+
+@pytest.mark.parametrize("raw,expected,flag", [
+    ("./results/a/{s}.txt", "results/a/{s}.txt", False),
+    ("results//b/{s}.txt", "results/b/{s}.txt", False),
+    ("results/sub/../d/{s}.txt", "results/d/{s}.txt", False),
+    ("results/out/{s}/", "results/out/{s}", False),
+    ("/abs/./x/{s}.txt", "/abs/x/{s}.txt", False),
+    ("results/{s,a/./b|c//d}.txt", "results/{s,a/./b|c//d}.txt", False),
+    ("results/{s}/../x.txt", "results/{s}/../x.txt", True),
+    ("../up/{s}.txt", "../up/{s}.txt", True),
+    ("results/{s}.txt", "results/{s}.txt", False),
+])
+def test_normalise_rule_path(raw, expected, flag):
+    assert normalise_rule_path(raw) == (expected, flag)
+
+
+def test_resolve_workdir_plain_and_workflow_layout(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "Snakefile").write_text("")
+    assert resolve_workdir(plain) == plain.resolve()
+    proj = tmp_path / "proj"
+    (proj / "workflow").mkdir(parents=True)
+    (proj / "workflow" / "Snakefile").write_text("")
+    assert resolve_workdir(proj) == proj.resolve()
+
+
+def test_find_rule_patterns_refuses_dotdot_after_wildcard(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s}/../x.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    with pytest.raises(PatternError) as excinfo:
+        find_rule_patterns(pipeline)
+    assert "rule `a`" in str(excinfo.value)
+    assert "results/{s}/../x.txt" in str(excinfo.value)
+
+
+def test_find_rule_patterns_leading_dotdot_resolves_against_workdir(
+    make_pipeline, make_results
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '../results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    patterns = find_rule_patterns(pipeline, results_dir=results)
+    assert len(patterns) == 1
+    assert patterns[0][1].match("results/1.txt")
+
+
+def test_find_rule_patterns_leading_dotdot_outside_results_is_dropped_with_warning(
+    make_pipeline, make_results
+):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '../elsewhere/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    warnings: list[str] = []
+    patterns = find_rule_patterns(
+        pipeline, on_warning=warnings.append, results_dir=results
+    )
+    assert patterns == []
+    assert len(warnings) == 1
+    assert "rule `a`" in warnings[0]

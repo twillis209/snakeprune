@@ -1133,3 +1133,37 @@ def test_cli_scan_absolute_output_under_results_dir_is_live(
     assert "orphan.csv" in result.stdout
     assert "1.txt" not in result.stdout
     assert "WARNING: dropping" not in result.output
+
+
+def test_cli_scan_unnormalised_rule_paths_are_live(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: './results/a/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        "    output: 'results//b/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule d:\n"
+        "    output: 'results/sub/../d/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["a/1.txt", "b/1.txt", "d/1.txt", "stale.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    assert "stale.csv" in result.stdout
+    for live in ("a/1.txt", "b/1.txt", "d/1.txt"):
+        assert live not in result.stdout
+
+
+def test_cli_scan_dotdot_after_wildcard_exits_4(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s}/../x.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["stray.txt"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--delete", "--yes"]
+    )
+    assert result.exit_code == 4
+    assert (results / "stray.txt").exists()
