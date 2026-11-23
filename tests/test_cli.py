@@ -1251,3 +1251,16 @@ def test_cli_scan_constraint_with_numeric_backref(make_pipeline, make_results):
     assert result.exit_code == 0, result.output
     assert "aa.txt" not in result.stdout
     assert "stale.csv" in result.stdout
+
+
+def test_cli_scan_with_print_in_snakefile(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        'print("Loaded 12 samples")\n'
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "obsolete.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0
+    assert "Loaded 12 samples" not in result.stdout

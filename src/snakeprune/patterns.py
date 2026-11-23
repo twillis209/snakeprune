@@ -265,8 +265,8 @@ def run_extractor(
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise ExtractorError(
-            "Extractor produced unparseable output. This is a bug; please "
-            f"report. stderr was:\n{result.stderr.strip()}"
+            "Extractor produced unparseable output on stdout. "
+            f"stderr was:\n{result.stderr.strip()}"
         ) from exc
 
     return [

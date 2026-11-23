@@ -898,3 +898,27 @@ def test_combine_rule_patterns_numeric_backrefs_do_not_cross_rules():
     combined = combine_rule_patterns(pats)
     assert combined.match("results/b/pp.txt")
     assert not combined.match("results/b/pq.txt")
+
+
+def test_run_extractor_tolerates_print_in_snakefile(make_pipeline):
+    pipeline = make_pipeline(
+        'print("Loaded 12 samples")\n'
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert [s.name for s in specs] == ["a"]
+
+
+def test_run_extractor_tolerates_child_process_stdout(make_pipeline):
+    pipeline = make_pipeline(
+        "import os, sys\n"
+        "os.system('echo from-child')\n"
+        "sys.stdout.write('x' * 100000)\n"
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    specs = run_extractor(pipeline)
+    assert [s.name for s in specs] == ["a"]

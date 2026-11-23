@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -142,6 +143,12 @@ def extract(pipeline_dir: Path, configfiles: list[Path]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Keep anything the workflow prints (Python or child processes) off the
+    # JSON channel: point fd 1 at stderr for the rest of the process and keep
+    # the original stdout aside for the payload. Deliberately not restored.
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
     parser = argparse.ArgumentParser(
         description="Extract Snakemake rule outputs as JSON.",
     )
@@ -163,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"extractor failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    json.dump(result, sys.stdout)
+    with os.fdopen(saved, "w") as out:
+        json.dump(result, out)
     return 0
 
 
