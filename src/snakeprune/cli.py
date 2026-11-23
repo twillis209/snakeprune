@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import typer
 
@@ -30,6 +30,53 @@ PROGRESS_INTERVAL = 10000
 DEFAULT_NAUGHTY_DIRS = frozenset(
     {"resources", "config", "profile", "workflow", ".snakemake"}
 )
+
+
+class ExcludeDirError(ValueError):
+    """An --exclude-dir value that cannot be honoured; carries the reason."""
+
+    def __init__(self, value: str, resolved: str, reason: str) -> None:
+        super().__init__(
+            f"--exclude-dir `{value}` (resolved to `{resolved}`) {reason}. "
+            "Relative paths resolve against the results directory."
+        )
+
+
+def _nested_rel(path: str, base: str) -> Optional[str]:
+    """Return ``path`` relative to ``base`` if strictly inside it, else None."""
+    if path.startswith(base.rstrip(os.sep) + os.sep):
+        return path[len(base.rstrip(os.sep)) + 1:]
+    return None
+
+
+def _resolve_exclude_dirs(results_dir: Path, values: Sequence[str]) -> list[str]:
+    """Validate ``--exclude-dir`` values and return them in the form the
+    walker compares against: ``abspath(join(results_dir, rel))``.
+
+    Each value must name an existing, non-symlink directory strictly inside
+    ``results_dir`` (lexically or after symlink resolution).
+    """
+    out: list[str] = []
+    base = os.fspath(results_dir)
+    for value in values:
+        joined = value if os.path.isabs(value) else os.path.join(base, value)
+        lexical = os.path.abspath(joined)
+        if not os.path.lexists(lexical):
+            raise ExcludeDirError(value, lexical, "does not exist")
+        if os.path.islink(lexical):
+            raise ExcludeDirError(value, lexical, "is a symlink; the scan never descends into symlinked directories")
+        if not os.path.isdir(lexical):
+            raise ExcludeDirError(value, lexical, "is not a directory")
+        rel = _nested_rel(lexical, os.path.abspath(base))
+        if rel is None:
+            rel = _nested_rel(os.path.realpath(lexical), os.path.realpath(base))
+        if rel is None:
+            raise ExcludeDirError(value, lexical, "is not strictly inside the results directory")
+        target = os.path.abspath(os.path.join(base, rel))
+        if os.path.islink(target) or not os.path.isdir(target):
+            raise ExcludeDirError(value, target, "is not a real directory inside the results directory")
+        out.append(target)
+    return out
 
 
 def _stdin_isatty() -> bool:
@@ -104,8 +151,10 @@ def scan(
     exclude_dir: Optional[list[str]] = typer.Option(
         None,
         "--exclude-dir",
-        help="Directory subtree to skip entirely; repeatable. Relative paths "
-             "resolve against results_dir.",
+        help="Directory subtree to skip entirely; repeatable. Must be an "
+             "existing, non-symlink directory strictly inside results_dir, "
+             "else the scan is refused (exit 3). Relative paths resolve "
+             "against results_dir, not the current directory.",
     ),
     permissive_wildcards: bool = typer.Option(
         False,
@@ -169,6 +218,12 @@ def scan(
             )
             raise typer.Exit(code=3)
 
+    try:
+        exclude_dirs = _resolve_exclude_dirs(results_dir, exclude_dir or ())
+    except ExcludeDirError as exc:
+        typer.echo(f"Refusing to scan: {exc}", err=True)
+        raise typer.Exit(code=3)
+
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
     try:
         match_prefix = results_match_prefix(pipeline_dir, results_dir)
@@ -225,16 +280,11 @@ def scan(
     file_count = 0
     target_prefix = match_prefix
     walk_stats: dict = {}
-    exclude_set: set[str] = set()
-    for d in exclude_dir or ():
-        p = Path(d)
-        resolved = p if p.is_absolute() else results_dir / p
-        exclude_set.add(os.path.abspath(resolved))
     for full_path, rel in iter_results_files(
         results_dir,
         ignore_globs=tuple(ignore or ()),
         follow_symlinks=follow_symlinks,
-        exclude_dirs=tuple(exclude_set),
+        exclude_dirs=tuple(set(exclude_dirs)),
         stats=walk_stats,
     ):
         if limit is not None and file_count >= limit:

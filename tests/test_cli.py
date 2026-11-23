@@ -1,3 +1,5 @@
+import os
+
 from typer.testing import CliRunner
 
 from snakeprune.cli import app
@@ -1264,3 +1266,105 @@ def test_cli_scan_with_print_in_snakefile(make_pipeline, make_results):
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0
     assert "Loaded 12 samples" not in result.stdout
+
+
+_EXCL_RULE = (
+    "rule a:\n"
+    "    output: 'results/{n}.txt'\n"
+    "    shell: 'touch {output}'\n"
+)
+
+
+def _assert_refused(result, value):
+    assert result.exit_code == 3
+    assert value in (result.stderr or "")
+
+
+def test_cli_exclude_dir_nonexistent_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["1.txt"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--exclude-dir", "nope"]
+    )
+    _assert_refused(result, "nope")
+
+
+def test_cli_exclude_dir_doubled_path_refuses_and_deletes_nothing(
+    make_pipeline, make_results, tmp_path, monkeypatch
+):
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["keep/x.csv"])
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results),
+            "--exclude-dir", "results/keep",
+            "--delete", "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    _assert_refused(result, "results/keep")
+    assert (results / "keep" / "x.csv").exists()
+
+
+def test_cli_exclude_dir_file_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["1.txt", "plain.csv"])
+    result = runner.invoke(
+        app,
+        [
+            "scan", str(pipeline), str(results), "--exclude-dir", "plain.csv",
+            "--delete", "--yes", "--allow-high-orphan-rate",
+        ],
+    )
+    _assert_refused(result, "plain.csv")
+    assert (results / "plain.csv").exists()
+
+
+def test_cli_exclude_dir_outside_results_refuses(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["1.txt"])
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--exclude-dir", str(sibling)]
+    )
+    _assert_refused(result, str(sibling))
+
+
+def test_cli_exclude_dir_is_results_dir_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["1.txt"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--exclude-dir", "."]
+    )
+    assert result.exit_code == 3
+    assert "`.`" in (result.stderr or "")
+
+
+def test_cli_exclude_dir_symlink_refuses(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(_EXCL_RULE)
+    results = make_results(["1.txt"])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (results / "link").symlink_to(elsewhere)
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--exclude-dir", "link"]
+    )
+    _assert_refused(result, "link")
+
+
+def test_cli_exclude_dir_realpath_under_symlinked_results_prunes(
+    make_pipeline, make_results, tmp_path
+):
+    pipeline = make_pipeline(_EXCL_RULE.replace("results/", "link/"))
+    results = make_results(["1.txt", "keep/x.csv"])
+    link = tmp_path / "link"
+    link.symlink_to(results)
+    real_keep = os.path.join(os.path.realpath(results), "keep")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(link), "--exclude-dir", real_keep]
+    )
+    assert result.exit_code == 0
+    assert "keep/x.csv" not in result.stdout
+    assert "Excluded 1 directory" in (result.stderr or "")
