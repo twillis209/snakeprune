@@ -1496,3 +1496,24 @@ def test_cli_scan_workdir_directive_with_absolute_rule_keeps_relative_outputs(
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     for i in (1, 2, 3):
         assert (results / "a" / f"{i}.txt").exists()
+
+
+def test_cli_exclude_dir_wrong_case_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt", "keep/x.csv"])
+    # On a case-insensitive filesystem `KEEP` exists and only the on-disk
+    # spelling check refuses; on a case-sensitive one the non-existence
+    # check refuses. Either way the result must be exit 3 and nothing deleted.
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--exclude-dir", "KEEP",
+         "--delete", "--yes"],
+    )
+    assert result.exit_code == 3
+    assert (results / "keep" / "x.csv").exists()
+    if os.path.exists(results / "KEEP"):
+        assert "on-disk spelling" in result.output

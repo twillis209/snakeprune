@@ -75,6 +75,16 @@ def _resolve_exclude_dirs(results_dir: Path, values: Sequence[str]) -> list[str]
         target = os.path.abspath(os.path.join(base, rel))
         if os.path.islink(target) or not os.path.isdir(target):
             raise ExcludeDirError(value, target, "is not a real directory inside the results directory")
+        # The walker compares path strings exactly, so every component must be
+        # spelled as on disk (case-insensitive filesystems accept other cases).
+        parent = base
+        for part in rel.split(os.sep):
+            if part not in os.listdir(parent):
+                raise ExcludeDirError(
+                    value, target,
+                    "does not match the on-disk spelling of any directory (check letter case)",
+                )
+            parent = os.path.join(parent, part)
         out.append(target)
     return out
 
