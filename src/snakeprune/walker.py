@@ -109,7 +109,7 @@ def iter_results_files(
     exclude_set = {os.path.abspath(p) for p in exclude_dirs}
     watch_key = watch_name.casefold() if watch_name is not None else None
     watched: list[tuple[str, str]] = []
-    if stats is not None:
+    if stats is not None and watch_key is not None:
         stats["watched"] = watched
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
