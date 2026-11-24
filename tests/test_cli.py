@@ -2150,7 +2150,7 @@ def test_cli_rule_inputs_are_live_even_if_nothing_produces_them(make_pipeline, m
     assert result.stdout.split() == [str(results / "frozen/junk.vcf.gz")]
     for kept in ("frozen/chr1.vcf.gz", "frozen/chr2.vcf.gz", "frozen/chr1.csi", "out/chr1.txt"):
         assert (results / kept).exists(), kept
-    assert "input)" in result.stderr
+    assert "input pattern(s)" in result.stderr
 
 
 def test_cli_rule_input_directory_protects_its_contents(make_pipeline, make_results):
@@ -2191,3 +2191,36 @@ def test_cli_input_outside_results_is_dropped_silently(make_pipeline, make_resul
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
     assert "dropping" not in result.stderr
+
+
+def test_cli_input_only_directory_still_fails_basename_guard(make_pipeline, tmp_path):
+    # Rules only read from data/; scanning it must not look like a results tree.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: 'data/{s}.fq'\n"
+        "    output: 'results/{s}.bam'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    data = pipeline / "data"
+    data.mkdir()
+    (data / "s1.fq").touch()
+    (data / "samples.tsv").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(data), "--delete", "--yes"])
+    assert result.exit_code == 3
+    assert (data / "samples.tsv").exists()
+
+
+def test_cli_workflow_with_only_rule_all_inputs_is_still_empty(make_pipeline, make_results):
+    pipeline = make_pipeline("rule all:\n    input: 'results/final.txt'\n")
+    results = make_results(["final.txt", "intermediate.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3
+    assert (results / "intermediate.txt").exists()
+
+
+def test_cli_reports_files_kept_only_as_inputs(make_pipeline, make_results):
+    pipeline = make_pipeline(_FROZEN_INPUT)
+    results = make_results(["out/chr1.txt", "frozen/chr1.vcf.gz", "frozen/chr1.csi"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "Kept 2 file(s) only because a rule reads them as input" in result.stderr

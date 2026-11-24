@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **270 tests**, split across six files:
+As of this writing the suite is **273 tests**, split across six files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (20) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (125) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (128) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (8 functions, 11 cases) — is `.snakepruneignore`
   parsed exactly, and are entries it cannot interpret refused?
@@ -346,7 +346,12 @@ genuinely mean it.
    directory protects its contents
    (`test_cli_rule_input_directory_protects_its_contents`); input functions,
    which cannot be resolved, are reported
-   (`test_cli_input_functions_are_reported_as_unprotected`).
+   (`test_cli_input_functions_are_reported_as_unprotected`). Inputs never count
+   towards the guards that ask whether the workflow writes here at all, so
+   a directory rules only read from still fails the basename check
+   (`test_cli_input_only_directory_still_fails_basename_guard`), and a
+   workflow left with only `rule all` is still refused as empty
+   (`test_cli_workflow_with_only_rule_all_inputs_is_still_empty`).
 
 ## The headline data-loss invariants
 

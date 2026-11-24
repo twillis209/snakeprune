@@ -458,9 +458,6 @@ def build_rule_patterns(
     """
     out: list[tuple[str, re.Pattern]] = []
     for spec in specs:
-        out.extend(
-            _input_patterns(spec, workdir, default_wildcard_regex, results_dir, match_prefix)
-        )
         for output_str in spec.outputs:
             is_directory = output_str in spec.directories
             raw_path = output_str
@@ -519,6 +516,26 @@ def _output_wildcard_constraints(spec: RuleSpec) -> dict[str, str]:
             if m.group("constraint") and m.group("name") not in found:
                 found[m.group("name")] = m.group("constraint")
     return {**spec.constraints, **found}
+
+
+def build_input_patterns(
+    specs: Sequence[RuleSpec],
+    workdir: Path,
+    default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
+    results_dir: Path | None = None,
+    match_prefix: str | None = None,
+) -> list[tuple[str, re.Pattern]]:
+    """Patterns for the paths rules read; see `_input_patterns`.
+
+    Kept apart from `build_rule_patterns` on purpose: the guards that ask
+    "does this workflow write here at all?" must look at outputs only.
+    """
+    out: list[tuple[str, re.Pattern]] = []
+    for spec in specs:
+        out.extend(
+            _input_patterns(spec, workdir, default_wildcard_regex, results_dir, match_prefix)
+        )
+    return out
 
 
 def _input_patterns(

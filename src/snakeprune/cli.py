@@ -15,6 +15,7 @@ from snakeprune.patterns import (
     ExtractorError,
     PatternError,
     SnakefileNotFound,
+    build_input_patterns,
     build_rule_patterns,
     combine_rule_patterns,
     extract_workflow,
@@ -427,10 +428,23 @@ def scan(
             results_dir=results_dir,
             match_prefix=match_prefix,
         )
+        input_patterns = build_input_patterns(
+            extracted.rules,
+            workdir,
+            default_wildcard_regex=wildcard_regex,
+            results_dir=results_dir,
+            match_prefix=match_prefix,
+        )
         if not permissive_wildcards:
             # Same rules with Snakemake's own `.+`: an orphan that matches
             # these may be a live output whose wildcard value contains `/`.
             permissive_patterns = build_rule_patterns(
+                extracted.rules,
+                workdir,
+                default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
+                results_dir=results_dir,
+                match_prefix=match_prefix,
+            ) + build_input_patterns(
                 extracted.rules,
                 workdir,
                 default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
@@ -443,7 +457,10 @@ def scan(
     except (ExtractorError, PatternError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=4)
-    log(f"Loaded {len(patterns)} rule path pattern(s) (output, log, benchmark, input).")
+    log(
+        f"Loaded {len(patterns)} rule path pattern(s) (output, log, benchmark) "
+        f"and {len(input_patterns)} input pattern(s)."
+    )
     dynamic = [(r.name, r.dynamic_inputs) for r in extracted.rules if r.dynamic_inputs]
     if dynamic:
         total_dynamic = sum(n for _, n in dynamic)
@@ -488,6 +505,7 @@ def scan(
             raise typer.Exit(code=3)
     try:
         combined = combine_rule_patterns(patterns)
+        combined_inputs = combine_rule_patterns(input_patterns)
         permissive = combine_rule_patterns(permissive_patterns or [])
     except PatternError as exc:
         typer.echo(str(exc), err=True)
@@ -510,6 +528,8 @@ def scan(
             combined=combined,
             permissive=permissive,
             permissive_patterns=permissive_patterns,
+            combined_inputs=combined_inputs,
+            explain_strict=patterns + input_patterns,
             patterns=patterns,
             prefixes=prefixes,
             rule_attribution=rule_attribution,
@@ -543,6 +563,8 @@ def _scan_and_report(
     combined,
     permissive,
     permissive_patterns,
+    combined_inputs,
+    explain_strict,
     patterns,
     prefixes,
     rule_attribution: bool,
@@ -564,13 +586,15 @@ def _scan_and_report(
     if basename_prefix != match_prefix:
         target_prefixes.append(basename_prefix)
     explainer = (
-        AmbiguityExplainer(permissive_patterns, strict=patterns)
+        # Outputs first, so a producer rule is named before a consumer.
+        AmbiguityExplainer(permissive_patterns, strict=explain_strict)
         if permissive_patterns
         else None
     )
     dir_summary = DirectorySummary(summary_depth) if summary else None
     walk_stats: dict = {}
     nested_ignore_files: list[str] = []
+    kept_as_input = 0
     n_orphans = 0
     n_ambiguous = 0
 
@@ -609,6 +633,9 @@ def _scan_and_report(
         targets = [tp + norm_rel for tp in target_prefixes]
         if combined is not None and any(combined.match(t) for t in targets):
             continue
+        if combined_inputs is not None and any(combined_inputs.match(t) for t in targets):
+            kept_as_input += 1
+            continue
         ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
         n_orphans += 1
         n_ambiguous += ambiguous
@@ -637,6 +664,12 @@ def _scan_and_report(
     except OSError as exc:
         raise _spool_failed(exc)
     log(f"Scanned {file_count} file(s); found {n_orphans} orphan(s).")
+    if kept_as_input:
+        typer.echo(
+            f"Kept {kept_as_input} file(s) only because a rule reads them as "
+            f"input (no rule produces them).",
+            err=True,
+        )
 
     skipped_dirs = walk_stats.get("skipped_symlinked_dirs", 0)
     if skipped_dirs > 0:
