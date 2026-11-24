@@ -2480,13 +2480,21 @@ def test_cli_dry_run_refuses_unmatched_ignore_glob(make_pipeline, make_results):
 
 
 def test_cli_dry_run_refuses_ancestor_ignore_file(make_pipeline, make_results):
-    pipeline = make_pipeline(_ONE_RULE)
-    results = _with_ignore_file(make_results(_LIVE + ["_snap/old.csv"]), "_snap/\n")
-    dry = runner.invoke(
-        app, ["scan", str(pipeline), str(results / "_snap"), "--allow-basename-mismatch"]
+    # results/sub is mostly live (no other guard fires), but scanning it
+    # bypasses results/.snakepruneignore, so the dry run is refused.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '{d}/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
     )
+    results = _with_ignore_file(
+        make_results([f"sub/{f}" for f in _LIVE] + ["sub/junk.csv", "keep/x.csv"]),
+        "keep/\n",
+    )
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results / "sub")])
     assert dry.exit_code == 3, dry.output
     assert dry.stdout == ""
+    assert "itself so its .snakepruneignore is honoured" in dry.stderr
 
 
 def test_cli_dry_run_refuses_naughty_dir_unless_allowed(make_pipeline, tmp_path):
@@ -2716,3 +2724,13 @@ def test_cli_dry_run_refuses_symlink_orphan_that_delete_would_refuse(
     )
     assert allowed.exit_code == 0, allowed.output
     assert allowed.stdout.split() == [str(results / "stale_link.csv")]
+
+
+def test_cli_dry_run_refuses_nested_ignore_file_hidden_by_ignore_glob(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/precious.dat"])
+    (results / "sub" / ".snakepruneignore").write_text("precious.dat\n")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results), "--ignore", "**/.*"])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "sub/.snakepruneignore" in dry.stderr
