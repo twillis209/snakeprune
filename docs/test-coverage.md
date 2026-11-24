@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **340 tests**, split across six files:
+As of this writing the suite is **351 tests**, split across six files:
 
-- `tests/test_patterns.py` (109) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (111) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (160) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (169) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore
@@ -279,9 +279,11 @@ genuinely mean it.
    uncaught error and a stack trace.
 
 9. **`--limit` caps the listing, never the walk.** `--limit N` lists at most N
-   orphans, but the whole tree is still walked, so every end-of-walk refusal
-   sees all of it (`test_cli_limit_still_walks_everything_so_every_refusal_applies`,
-   `test_cli_limit_caps_the_listing`). Passing it together with `--delete` or
+   deletable orphans on stdout (ambiguous ones on stderr are not counted), but
+   the whole tree is still walked, so every end-of-walk refusal sees all of it
+   (`test_cli_limit_still_walks_everything_so_every_refusal_applies`,
+   `test_cli_limit_caps_the_listing`,
+   `test_cli_limit_counts_only_listed_deletable_orphans`). Passing it together with `--delete` or
    `--trash` is refused outright (exit 3), since that would delete files you
    were never shown. On its own, for a dry run, it stays legal.
 
@@ -393,16 +395,23 @@ before its fix:
   `test_extract_workflow_reports_the_directory_snakemake_ends_up_in`,
   `test_extract_workflow_follows_a_chdir_made_while_parsing`,
   `test_extract_workflow_relative_pipeline_dir_and_configfile`). An absolute
-  rule path (output or input) outside the results dir with a wildcard in a
-  directory part refuses (exit 4) unless `--allow-wildcard-absolute-paths`,
-  since a wildcard value or symlink could lead it into the tree; a literal
-  one or one with a wildcard only in its final component is still dropped
-  (outputs, with a warning) or skipped (inputs); one in another letter case
-  is mapped only where the filesystem says the spellings are the same
-  directory (`test_absolute_output_with_wildcard_above_results_dir_is_refused`,
+  rule path (output or input) outside the results dir with any wildcard
+  refuses (exit 4) unless `--allow-wildcard-absolute-paths`, since a
+  wildcard value may contain `/` (`<base>/{x}.dat` names
+  `<base>/proj/results/live.dat`) and a symlink can lead it into the tree;
+  a literal one is still dropped (outputs, with a warning) or skipped
+  (inputs), unless it resolves into the tree (a symlink such as
+  `<ext>/link -> <results>/sub`), when it is mapped there; one in another
+  letter case is mapped only where the filesystem says the spellings are
+  the same directory. `find_rule_patterns` takes the same override
+  (`test_absolute_output_with_wildcard_only_in_final_component_is_refused`,
+  `test_absolute_input_with_wildcard_only_in_final_component_is_refused`,
+  `test_cli_absolute_output_with_wildcard_in_last_component_can_alias_results`,
+  `test_cli_literal_absolute_path_that_is_a_symlink_into_results_is_live`,
+  `test_cli_literal_absolute_input_that_is_a_symlink_to_results_protects_all`,
+  `test_find_rule_patterns_accepts_the_wildcard_absolute_override`, (`test_absolute_output_with_wildcard_above_results_dir_is_refused`,
   `test_absolute_directory_output_containing_results_dir_is_refused`,
   `test_absolute_output_outside_results_dir_is_still_dropped_with_warning`,
-  `test_absolute_output_with_wildcard_only_in_final_component_is_dropped`,
   `test_absolute_input_with_wildcard_directory_elsewhere_is_refused`,
   `test_allow_wildcard_absolute_paths_skips_with_a_warning`,
   `test_cli_absolute_output_with_wildcard_dir_through_symlink_refuses`,
@@ -473,6 +482,20 @@ before its fix:
   `test_ancestor_ignore_file_found_by_resolved_path`,
   `test_cli_ancestor_ignore_file_seen_through_symlinked_results_dir`).
 
+### Round-3 fixes: symlink aliasing
+
+A symlink in the working directory that leads into, onto or above the
+results tree lets a relative rule path name a results file under another
+spelling (`pa -> .` with output `p{x}/results/live.dat`). The workdir is
+scanned for such links before the walk, never following them and skipping
+the results tree and `.snakemake/`; any hit refuses (exit 3, dry run
+included) unless `--allow-results-aliases`. The results dir as given, and
+its lexical ancestors, are exempt, and broken links are ignored
+(`test_cli_symlink_in_workdir_aliasing_results_refuses`,
+`test_cli_results_dir_given_through_a_symlink_is_not_an_alias`,
+`test_cli_symlinked_ancestor_on_the_way_in_is_not_an_alias`,
+`test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links`).
+
 ## The headline data-loss invariants
 
 Two tests exist specifically to be the thing you point a sceptic at. They do
@@ -513,8 +536,8 @@ Trust comes from knowing the edges, so here are the gaps that remain:
   paths in another letter case have dedicated tests; the rest is by
   inspection rather than by proof. Some ignore-file case tests can only run
   on one kind of filesystem and skip on the other.
-- **Absolute rule paths with a wildcard in a directory part** are refused
-  by default wherever they point, because snakeprune cannot rule out a
+- **Absolute rule paths with any wildcard** are refused by default wherever
+  they point, because snakeprune cannot rule out a
   wildcard value or symlink leading into the results tree;
   `--allow-wildcard-absolute-paths` drops them with a warning and hands that
   judgement to the user.
