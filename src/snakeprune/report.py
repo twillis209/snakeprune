@@ -201,7 +201,13 @@ class AmbiguityExplainer:
         self,
         patterns: list[tuple[str, re.Pattern]],
         strict: list[tuple[str, re.Pattern]] | None = None,
+        fallback=None,
     ) -> None:
+        # ``fallback`` (an ``InputMatcher`` built with ``.+``) attributes files
+        # that only an input pattern claims. Input wildcards carry no explicit
+        # constraint of their own, so a ``.+`` body there means unconstrained.
+        self._fallback = fallback
+        self._fallback_free: dict[int, tuple[str, ...]] = {}
         aligned = strict is not None and len(strict) == len(patterns) and all(
             a[0] == b[0] for a, b in zip(strict, patterns)
         )
@@ -236,10 +242,24 @@ class AmbiguityExplainer:
 
     def add(self, rel: str, targets: list[str]) -> None:
         hit = self._find(targets)
-        if hit is None:
-            return
-        index, match = hit
-        name, _, _, unconstrained = self._patterns[index]
+        if hit is not None:
+            index, match = hit
+            name, _, _, unconstrained = self._patterns[index]
+        else:
+            found = None
+            if self._fallback is not None:
+                for t in targets:
+                    found = self._fallback.find(t)
+                    if found:
+                        break
+            if found is None:
+                return
+            name, rx, match = found
+            unconstrained = self._fallback_free.get(id(rx))
+            if unconstrained is None:
+                unconstrained = self._groups_with_body(rx, SNAKEMAKE_WILDCARD_REGEX)
+                self._fallback_free[id(rx)] = unconstrained
+            name = f"{name} (input)"
         key = (name, unconstrained)
         entry = self._found.get(key)
         if entry is None:

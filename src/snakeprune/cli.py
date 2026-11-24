@@ -387,6 +387,7 @@ def scan(
         SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
     )
     permissive_patterns = None
+    permissive_inputs = None
     try:
         resolve_snakefile(pipeline_dir)
         extracted = extract_workflow(
@@ -444,7 +445,8 @@ def scan(
                 default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
                 results_dir=results_dir,
                 match_prefix=match_prefix,
-            ) + build_input_patterns(
+            )
+            permissive_inputs = build_input_patterns(
                 extracted.rules,
                 workdir,
                 default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
@@ -505,7 +507,6 @@ def scan(
             raise typer.Exit(code=3)
     try:
         combined = combine_rule_patterns(patterns)
-        combined_inputs = combine_rule_patterns(input_patterns)
         permissive = combine_rule_patterns(permissive_patterns or [])
     except PatternError as exc:
         typer.echo(str(exc), err=True)
@@ -528,8 +529,8 @@ def scan(
             combined=combined,
             permissive=permissive,
             permissive_patterns=permissive_patterns,
-            combined_inputs=combined_inputs,
-            explain_strict=patterns + input_patterns,
+            input_matcher=input_patterns,
+            permissive_inputs=permissive_inputs,
             patterns=patterns,
             prefixes=prefixes,
             rule_attribution=rule_attribution,
@@ -563,8 +564,8 @@ def _scan_and_report(
     combined,
     permissive,
     permissive_patterns,
-    combined_inputs,
-    explain_strict,
+    input_matcher,
+    permissive_inputs,
     patterns,
     prefixes,
     rule_attribution: bool,
@@ -587,7 +588,7 @@ def _scan_and_report(
         target_prefixes.append(basename_prefix)
     explainer = (
         # Outputs first, so a producer rule is named before a consumer.
-        AmbiguityExplainer(permissive_patterns, strict=explain_strict)
+        AmbiguityExplainer(permissive_patterns, strict=patterns, fallback=permissive_inputs)
         if permissive_patterns
         else None
     )
@@ -633,10 +634,14 @@ def _scan_and_report(
         targets = [tp + norm_rel for tp in target_prefixes]
         if combined is not None and any(combined.match(t) for t in targets):
             continue
-        if combined_inputs is not None and any(combined_inputs.match(t) for t in targets):
+        if len(input_matcher) and any(input_matcher.match(t) for t in targets):
             kept_as_input += 1
             continue
-        ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
+        ambiguous = (permissive is not None and any(permissive.match(t) for t in targets)) or (
+            permissive_inputs is not None
+            and len(permissive_inputs) > 0
+            and any(permissive_inputs.match(t) for t in targets)
+        )
         n_orphans += 1
         n_ambiguous += ambiguous
         if ambiguous and explainer is not None:

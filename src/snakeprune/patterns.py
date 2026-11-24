@@ -518,65 +518,111 @@ def _output_wildcard_constraints(spec: RuleSpec) -> dict[str, str]:
     return {**spec.constraints, **found}
 
 
+class InputMatcher:
+    """Matches files against the paths rules read, fast enough for tens of
+    thousands of input patterns.
+
+    Workflows often expand an input over thousands of literal names
+    (``expand(..., gene=GENES, allow_missing=True)``), so a single combined
+    regex would be far too slow. Patterns whose final path segment is literal
+    are bucketed by it: a file is tested only against patterns that share its
+    name, or (since an input may be a directory) its parent directories'
+    names. The few whose final segment has a wildcard form one combined regex.
+    """
+
+    def __init__(self) -> None:
+        self._by_name: dict[str, list[tuple[str, re.Pattern]]] = {}
+        self._generic: list[tuple[str, re.Pattern]] = []
+        self._generic_combined: CombinedPattern | None = None
+        self._count = 0
+
+    def _add(self, rule: str, path: str, constraints: dict[str, str], default: str) -> None:
+        last = _split_outside_wildcards(path)[-1]
+        if _WILDCARD_RE.search(last) is None:
+            rx = re.compile(wildcard_pattern_to_regex(path, constraints, default=default))
+            self._by_name.setdefault(last, []).append((rule, rx))
+        else:
+            rx = re.compile(wildcard_pattern_to_regex(
+                path, constraints, default=default, is_directory=True,
+            ))
+            self._generic.append((rule, rx))
+        self._count += 1
+
+    def _finish(self) -> None:
+        self._generic_combined = combine_rule_patterns(self._generic)
+
+    def __len__(self) -> int:
+        return self._count
+
+    def _candidates(self, target: str):
+        """Yield ``(rule, regex, text)``: each pattern worth trying, and the
+        prefix of ``target`` (itself, or an ancestor directory) to try it on."""
+        parts = target.split("/")
+        for k in range(len(parts), 0, -1):
+            bucket = self._by_name.get(parts[k - 1])
+            if bucket:
+                prefix = "/".join(parts[:k])
+                for rule, rx in bucket:
+                    yield rule, rx, prefix
+
+    def match(self, target: str) -> bool:
+        if self._generic_combined is not None and self._generic_combined.match(target):
+            return True
+        return any(rx.match(text) for _, rx, text in self._candidates(target))
+
+    def find(self, target: str) -> tuple[str, re.Pattern, re.Match[str]] | None:
+        """The first pattern matching ``target``, for reporting."""
+        for rule, rx in self._generic:
+            m = rx.match(target)
+            if m:
+                return rule, rx, m
+        for rule, rx, text in self._candidates(target):
+            m = rx.match(text)
+            if m:
+                return rule, rx, m
+        return None
+
+
 def build_input_patterns(
     specs: Sequence[RuleSpec],
     workdir: Path,
     default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
     results_dir: Path | None = None,
     match_prefix: str | None = None,
-) -> list[tuple[str, re.Pattern]]:
-    """Patterns for the paths rules read; see `_input_patterns`.
+) -> InputMatcher:
+    """Matcher for the paths rules read, which are live whether or not a rule
+    produces them.
 
     Kept apart from `build_rule_patterns` on purpose: the guards that ask
     "does this workflow write here at all?" must look at outputs only.
+    Input wildcards take the constraints of the rule's outputs, since their
+    values come from matching the outputs. Each input also covers everything
+    beneath it, in case it is a directory. An input that cannot be turned into
+    a pattern (absolute outside the results directory, `..` after a wildcard,
+    unparseable braces) is skipped without comment: inputs routinely live
+    outside the results tree, and skipping only narrows protection the user
+    did not have before.
     """
-    out: list[tuple[str, re.Pattern]] = []
+    matcher = InputMatcher()
     for spec in specs:
-        out.extend(
-            _input_patterns(spec, workdir, default_wildcard_regex, results_dir, match_prefix)
-        )
-    return out
-
-
-def _input_patterns(
-    spec: RuleSpec,
-    workdir: Path,
-    default_wildcard_regex: str,
-    results_dir: Path | None,
-    match_prefix: str | None,
-) -> list[tuple[str, re.Pattern]]:
-    """Patterns for the paths a rule reads, which are live whether or not a
-    rule produces them.
-
-    Each also covers everything beneath it, in case the input is a directory.
-    An input that cannot be turned into a pattern (absolute outside the
-    results directory, `..` after a wildcard, unparseable braces) is skipped
-    without comment: inputs routinely live outside the results tree, and
-    skipping only narrows protection the user did not have before.
-    """
-    constraints = _output_wildcard_constraints(spec)
-    out: list[tuple[str, re.Pattern]] = []
-    for raw in spec.inputs:
-        path, dotdot = normalise_rule_path(unicodedata.normalize("NFC", raw))
-        if dotdot and path.startswith("../"):
-            path, dotdot = normalise_rule_path(str(workdir) + "/" + path)
-        if dotdot or not path:
-            continue
-        if path.startswith("/"):
-            rewritten = _rewrite_under_results_dir(path, results_dir, match_prefix)
-            if rewritten is None:
+        constraints = _output_wildcard_constraints(spec)
+        for raw in spec.inputs:
+            path, dotdot = normalise_rule_path(unicodedata.normalize("NFC", raw))
+            if dotdot and path.startswith("../"):
+                path, dotdot = normalise_rule_path(str(workdir) + "/" + path)
+            if dotdot or not path:
                 continue
-            path = rewritten
-        try:
-            out.append((
-                spec.name,
-                re.compile(wildcard_pattern_to_regex(
-                    path, constraints, default=default_wildcard_regex, is_directory=True,
-                )),
-            ))
-        except (PatternError, re.error):
-            continue
-    return out
+            if path.startswith("/"):
+                rewritten = _rewrite_under_results_dir(path, results_dir, match_prefix)
+                if rewritten is None:
+                    continue
+                path = rewritten
+            try:
+                matcher._add(spec.name, path, constraints, default_wildcard_regex)
+            except (PatternError, re.error):
+                continue
+    matcher._finish()
+    return matcher
 
 
 def extract_literal_prefix(compiled: re.Pattern) -> str:

@@ -950,3 +950,54 @@ def test_find_rule_patterns_maps_absolute_path_spelled_through_symlink(make_pipe
     assert len(patterns) == 2
     assert any(p.match("results/sub/1.txt") for _, p in patterns)
     assert any(p.match("results/static.txt") for _, p in patterns)
+
+
+def _matcher(inputs, outputs=("results/out/{x}.txt",), constraints=None, default=r"[^/]+"):
+    from pathlib import Path
+
+    from snakeprune.patterns import RuleSpec, build_input_patterns
+
+    spec = RuleSpec(name="r", outputs=list(outputs), constraints=constraints or {},
+                    inputs=list(inputs))
+    return build_input_patterns([spec], Path("/wd"), default_wildcard_regex=default)
+
+
+def test_input_matcher_literal_name_wildcard_name_and_directory():
+    m = _matcher([
+        "results/g/{maf}/ENSG1.vcf.gz",       # literal final segment: bucketed
+        "results/s/{sample}.bam",             # wildcard final segment: generic
+        "results/ref",                        # literal; may be a directory
+    ])
+    assert len(m) == 3
+    assert m.match("results/g/5/ENSG1.vcf.gz")
+    assert not m.match("results/g/5/ENSG2.vcf.gz")
+    assert m.match("results/s/a.bam") and not m.match("results/s/a/b.bam")
+    assert m.match("results/ref") and m.match("results/ref/x/y.fa")
+    assert not m.match("results/ref.bak/y.fa")
+    rule, _, match = m.find("results/g/5/ENSG1.vcf.gz")
+    assert rule == "r" and match.group("maf") == "5"
+
+
+def test_input_matcher_takes_output_constraints():
+    m = _matcher(["results/v/{chr}.vcf.gz"], outputs=["results/o/{chr,chr[0-9]+}.txt"])
+    assert m.match("results/v/chr1.vcf.gz")
+    assert not m.match("results/v/junk.vcf.gz")
+
+
+def test_input_matcher_permissive_spans_slash():
+    m = _matcher(["results/g/{maf}/ENSG1.vcf.gz"], default=".+")
+    assert m.match("results/g/a/b/ENSG1.vcf.gz")
+
+
+def test_input_matcher_scales_to_tens_of_thousands_of_inputs():
+    import time
+
+    m = _matcher([f"results/g/{{maf}}/{{r2}}/ENSG{i:011d}.vcf.gz" for i in range(40000)])
+    targets = [f"results/stale/{i}/x.csv" for i in range(20000)] + [
+        f"results/g/0/1_0/ENSG{i:011d}.vcf.gz" for i in range(0, 40000, 2)
+    ]
+    start = time.perf_counter()
+    hits = sum(m.match(t) for t in targets)
+    elapsed = time.perf_counter() - start
+    assert hits == 20000
+    assert elapsed < 2.0, elapsed

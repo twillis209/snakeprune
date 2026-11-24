@@ -106,3 +106,16 @@ def test_explainer_caps_rules_shown():
         ex.add("a/b.txt", [f"d{i}/a/b.txt"])
     text = "\n".join(ex.render())
     assert "... and 5 more rule(s) covering 5 file(s)." in text
+
+
+def test_explainer_falls_back_to_input_patterns():
+    from pathlib import Path
+
+    from snakeprune.patterns import RuleSpec, build_input_patterns
+
+    spec = RuleSpec(name="use", outputs=["results/o/{x}.txt"], constraints={},
+                    inputs=["results/i/{x}/data.tsv"])
+    fallback = build_input_patterns([spec], Path("/wd"), default_wildcard_regex=".+")
+    ex = AmbiguityExplainer([], fallback=fallback)
+    ex.add("i/a/b/data.tsv", ["results/i/a/b/data.tsv"])
+    assert "use (input): 1 file(s); unconstrained: {x}" in "\n".join(ex.render())

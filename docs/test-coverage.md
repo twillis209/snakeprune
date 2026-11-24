@@ -6,9 +6,9 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **273 tests**, split across six files:
+As of this writing the suite is **278 tests**, split across six files:
 
-- `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (86) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (20) — does the deletion primitive refuse the things
@@ -17,7 +17,7 @@ As of this writing the suite is **273 tests**, split across six files:
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (8 functions, 11 cases) — is `.snakepruneignore`
   parsed exactly, and are entries it cannot interpret refused?
-- `tests/test_report.py` (8) — does the on-disk orphan list return exactly
+- `tests/test_report.py` (9) — does the on-disk orphan list return exactly
   what was written, and do the summary and wildcard report count correctly?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -351,7 +351,9 @@ genuinely mean it.
    a directory rules only read from still fails the basename check
    (`test_cli_input_only_directory_still_fails_basename_guard`), and a
    workflow left with only `rule all` is still refused as empty
-   (`test_cli_workflow_with_only_rule_all_inputs_is_still_empty`).
+   (`test_cli_workflow_with_only_rule_all_inputs_is_still_empty`). Input
+   matching stays fast with tens of thousands of expanded inputs
+   (`test_input_matcher_scales_to_tens_of_thousands_of_inputs`).
 
 ## The headline data-loss invariants
 
