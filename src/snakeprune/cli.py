@@ -193,18 +193,21 @@ def scan(
     allow_basename_mismatch: bool = typer.Option(
         False,
         "--allow-basename-mismatch",
-        help="Bypass refusal when no rule writes under the results-dir basename.",
+        help="Bypass the refusals when no rule writes under the results-dir "
+             "basename, or the results dir is the workflow working directory.",
     ),
     orphan_rate_threshold: float = typer.Option(
         0.5,
         "--orphan-rate-threshold",
-        help="Fraction (0.0-1.0) above which the high-orphan-rate warning fires "
-             "(default 0.5; pass 1.0 to disable).",
+        help="Fraction (0.0-1.0) of scanned files (excluding those kept only "
+             "as inputs) above which the scan is refused (default 0.5; pass "
+             "1.0 to disable).",
     ),
     allow_high_orphan_rate: bool = typer.Option(
         False,
         "--allow-high-orphan-rate",
-        help="Bypass --delete refusal when orphan rate exceeds threshold.",
+        help="Bypass the refusal (dry run or delete) when the orphan rate "
+             "exceeds the threshold.",
     ),
     yes: bool = typer.Option(
         False,
@@ -229,7 +232,8 @@ def scan(
     allow_naughty_dir: bool = typer.Option(
         False,
         "--allow-naughty-dir",
-        help="Bypass the delete/trash refusal when the target dir basename is on the naughty list.",
+        help="Bypass the refusal (dry run or delete) when the target dir "
+             "basename is on the naughty list.",
     ),
     exclude_dir: Optional[list[str]] = typer.Option(
         None,
@@ -268,8 +272,9 @@ def scan(
     allow_locked: bool = typer.Option(
         False,
         "--allow-locked",
-        help="Bypass the delete/trash refusal when the working directory "
-             "holds Snakemake locks (use only for stale locks from a crashed run).",
+        help="Bypass the refusal (dry run or delete) when the working "
+             "directory holds Snakemake locks (use only for stale locks from "
+             "a crashed run).",
     ),
     summary: bool = typer.Option(
         False,
@@ -302,6 +307,10 @@ def scan(
         raise typer.Exit(code=3)
 
     deleting = delete or trash is not None
+    # A refusal about live-file risk stops a dry run too (exit 3, nothing on
+    # stdout): stdout must list exactly what --delete would remove, and a
+    # list --delete would refuse is a list someone may pipe into `rm`.
+    refusing = "Refusing to delete" if deleting else "Refusing to list orphans"
     if summary and deleting:
         typer.echo(
             "Refusing to delete: --summary shows directory totals, not the "
@@ -310,9 +319,9 @@ def scan(
             err=True,
         )
         raise typer.Exit(code=3)
-    if deleting and os.path.realpath(results_dir) == os.path.abspath(os.sep):
+    if os.path.realpath(results_dir) == os.path.abspath(os.sep):
         typer.echo(
-            "Refusing to delete: the scanned directory is the filesystem root.",
+            f"{refusing}: the scanned directory is the filesystem root.",
             err=True,
         )
         raise typer.Exit(code=3)
@@ -338,9 +347,9 @@ def scan(
             f"target.",
             err=True,
         )
-        if (delete or trash is not None) and not allow_naughty_dir:
+        if not allow_naughty_dir:
             typer.echo(
-                f"Refusing to delete: `{results_name}` looks like a "
+                f"{refusing}: `{results_name}` looks like a "
                 f"Snakemake input/config directory. Pass --allow-naughty-dir "
                 f"to override.",
                 err=True,
@@ -366,13 +375,12 @@ def scan(
             f"above this one, and is not applied when scanning a subdirectory.",
             err=True,
         )
-        if deleting:
-            typer.echo(
-                f"Refusing to delete: scan {ancestor_ignore_files[0].parent} "
-                f"itself so its {IGNORE_FILE_NAME} is honoured.",
-                err=True,
-            )
-            raise typer.Exit(code=3)
+        typer.echo(
+            f"{refusing}: scan {ancestor_ignore_files[0].parent} "
+            f"itself so its {IGNORE_FILE_NAME} is honoured.",
+            err=True,
+        )
+        raise typer.Exit(code=3)
     ignore = [*(ignore or ()), *file_globs]
     try:
         _compile_globs(ignore)
@@ -404,9 +412,9 @@ def scan(
         if extracted.workdir_source == "directive":
             log(f"Workflow sets `workdir: {workdir}`; rule paths are read relative to it.")
         locks_dir = workdir / ".snakemake" / "locks"
-        if deleting and not allow_locked and locks_dir.is_dir() and any(locks_dir.iterdir()):
+        if not allow_locked and locks_dir.is_dir() and any(locks_dir.iterdir()):
             typer.echo(
-                f"Refusing to delete: `{locks_dir}` is not empty, so a "
+                f"{refusing}: `{locks_dir}` is not empty, so a "
                 f"Snakemake run appears to be in progress and its partial "
                 f"files would be listed as orphans. Wait for it to finish; "
                 f"if the locks are stale (a crashed run), clear them with "
@@ -419,9 +427,9 @@ def scan(
             results_dir,
             workdir=None if extracted.workdir_source == "default" else workdir,
         )
-        if match_prefix == "" and deleting and not allow_basename_mismatch:
+        if match_prefix == "" and not allow_basename_mismatch:
             typer.echo(
-                "Refusing to delete: the scanned directory is the workflow's "
+                f"{refusing}: the scanned directory is the workflow's "
                 "working directory, so the Snakefile, config and inputs would "
                 "be listed as orphans. Scan the results directory instead, or "
                 "pass --allow-basename-mismatch to override.",
@@ -545,6 +553,7 @@ def scan(
             allow_high_orphan_rate=allow_high_orphan_rate,
             delete_ambiguous=delete_ambiguous,
             deleting=deleting,
+            refusing=refusing,
             summary=summary,
             summary_depth=summary_depth,
             yes=yes,
@@ -580,6 +589,7 @@ def _scan_and_report(
     allow_high_orphan_rate: bool,
     delete_ambiguous: bool,
     deleting: bool,
+    refusing: str,
     summary: bool,
     summary_depth: int,
     yes: bool,
@@ -744,22 +754,57 @@ def _scan_and_report(
                 err=True,
             )
 
+    # The listing and the orphan rate above cover every orphan; only the
+    # unambiguous ones go on to deletion unless --delete-ambiguous.
+    to_delete = OrphanSelection(spool, include_ambiguous=delete_ambiguous)
+    n_delete = len(to_delete)
+    # Each refusal below is about a file that may be live or protected, so
+    # it stops a dry run as well as --delete, before anything reaches stdout.
+    # (Summary mode spools nothing, so count from the walk.)
+    n_candidates = n_orphans if delete_ambiguous else n_orphans - n_ambiguous
+    refusals: list[str] = []
+    if n_candidates:
+        if unmatched:
+            refusals.append(
+                f"{refusing}: {ignore_file.path.name} has entries that "
+                f"matched no scanned file, so something you meant to protect "
+                f"may be in the orphan list. Fix those lines, or comment out "
+                f"any that are simply not needed right now."
+            )
+        if nested_ignore_files:
+            refusals.append(
+                f"{refusing}: move the entries of the nested "
+                f"{IGNORE_FILE_NAME} file(s) into {results_dir / IGNORE_FILE_NAME}."
+            )
+        if high_rate and not allow_high_orphan_rate:
+            refusals.append(
+                f"{refusing}: orphan rate exceeded threshold. Pass "
+                f"--allow-high-orphan-rate to override."
+            )
+
     if dir_summary is not None:
         # stderr, not stdout: stdout is reserved for paths that would be
         # deleted, and a directory column piped into `rm -r` would be a disaster.
         for line in dir_summary.render():
             typer.echo(line, err=True)
-    else:
+    if refusals:
+        for msg in refusals:
+            typer.echo(msg, err=True)
+        raise typer.Exit(code=3)
+    if dir_summary is None:
         # stdout carries exactly the files --delete would remove, so a held-back
         # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
-        for orphan in spool.iter_orphans():
-            line = str(orphan.path)
-            if rule_attribution and orphan.likely_rule:
-                line += f"\t(likely: {orphan.likely_rule})"
-            if orphan.ambiguous and not delete_ambiguous:
-                typer.echo(f"ambiguous: {line}", err=True)
-            else:
-                typer.echo(line)
+        try:
+            for orphan in spool.iter_orphans():
+                line = str(orphan.path)
+                if rule_attribution and orphan.likely_rule:
+                    line += f"\t(likely: {orphan.likely_rule})"
+                if orphan.ambiguous and not delete_ambiguous:
+                    typer.echo(f"ambiguous: {line}", err=True)
+                else:
+                    typer.echo(line)
+        except OSError as exc:
+            raise _spool_failed(exc)
 
     if n_ambiguous:
         fate = (
@@ -784,10 +829,6 @@ def _scan_and_report(
             for line in explainer.render():
                 typer.echo(line, err=True)
 
-    # The listing and the orphan rate above cover every orphan; only the
-    # unambiguous ones go on to deletion unless --delete-ambiguous.
-    to_delete = OrphanSelection(spool, include_ambiguous=delete_ambiguous)
-    n_delete = len(to_delete)
     if deleting and n_delete:
         total_bytes = 0
         try:
@@ -802,29 +843,6 @@ def _scan_and_report(
             f"About to delete {n_delete} file(s), {total_bytes} byte(s).",
             err=True,
         )
-        if unmatched:
-            typer.echo(
-                f"Refusing to delete: {ignore_file.path.name} has entries that "
-                f"matched no scanned file, so something you meant to protect "
-                f"may be in the deletion list. Fix those lines, or comment out "
-                f"any that are simply not needed right now.",
-                err=True,
-            )
-            raise typer.Exit(code=3)
-        if nested_ignore_files:
-            typer.echo(
-                f"Refusing to delete: move the entries of the nested "
-                f"{IGNORE_FILE_NAME} file(s) into {results_dir / IGNORE_FILE_NAME}.",
-                err=True,
-            )
-            raise typer.Exit(code=3)
-        if high_rate and not allow_high_orphan_rate:
-            typer.echo(
-                "Refusing to delete: orphan rate exceeded threshold. Pass "
-                "--allow-high-orphan-rate to override.",
-                err=True,
-            )
-            raise typer.Exit(code=3)
         if not yes:
             if not _stdin_isatty():
                 typer.echo(

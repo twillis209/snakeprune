@@ -146,7 +146,8 @@ def test_cli_scan_allow_empty_rules_bypasses_refusal(tmp_path):
     results.mkdir()
     (results / "anything.txt").write_text("x")
     result = runner.invoke(
-        app, ["scan", str(pipeline), str(results), "--allow-empty-rules"]
+        app,
+        ["scan", str(pipeline), str(results), "--allow-empty-rules", "--allow-high-orphan-rate"],
     )
     assert result.exit_code == 0
     assert "anything.txt" in result.stdout
@@ -183,13 +184,14 @@ def test_cli_scan_allow_basename_mismatch_bypasses_refusal(make_pipeline, tmp_pa
     wrong.mkdir()
     (wrong / "x.txt").write_text("x")
     result = runner.invoke(
-        app, ["scan", str(pipeline), str(wrong), "--allow-basename-mismatch"]
+        app,
+        ["scan", str(pipeline), str(wrong), "--allow-basename-mismatch", "--allow-high-orphan-rate"],
     )
     assert result.exit_code == 0
     assert "x.txt" in result.stdout
 
 
-def test_cli_scan_warns_when_orphan_rate_high(make_pipeline, make_results):
+def test_cli_scan_warns_and_refuses_when_orphan_rate_high(make_pipeline, make_results):
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{n}.txt'\n"
@@ -198,7 +200,9 @@ def test_cli_scan_warns_when_orphan_rate_high(make_pipeline, make_results):
     # 1 live ('1.txt') vs 3 orphans -> 75% rate.
     results = make_results(["1.txt", "obs1.csv", "obs2.csv", "obs3.csv"])
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
-    assert result.exit_code == 0
+    # The dry run refuses as --delete would, listing nothing.
+    assert result.exit_code == 3
+    assert result.stdout == ""
     combined = result.stdout + (result.stderr or "")
     assert "WARNING" in combined
     assert "75" in combined  # percentage in the warning
@@ -469,9 +473,10 @@ def test_cli_scan_forwards_configfile_to_extractor(make_pipeline, tmp_path):
     assert "qc/s1.tsv" not in result_with_cfg.stdout
 
 
-def test_cli_scan_naughty_dir_dry_run_warns_but_proceeds(make_pipeline, tmp_path):
+def test_cli_scan_naughty_dir_dry_run_allowed_warns_but_proceeds(make_pipeline, tmp_path):
     # Rule writes under `resources/` so the basename-mismatch refusal does NOT
-    # fire; this isolates the naughty-dir warning on a clean dry-run.
+    # fire; this isolates the naughty-dir warning on a dry run that passes
+    # --allow-naughty-dir (without it the dry run is refused).
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'resources/{n}.txt'\n"
@@ -480,7 +485,10 @@ def test_cli_scan_naughty_dir_dry_run_warns_but_proceeds(make_pipeline, tmp_path
     resources = tmp_path / "resources"
     resources.mkdir()
     (resources / "obsolete.csv").write_text("x")
-    result = runner.invoke(app, ["scan", str(pipeline), str(resources)])
+    (resources / "1.txt").write_text("x")
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(resources), "--allow-naughty-dir"]
+    )
     assert result.exit_code == 0
     combined = result.stdout + (result.stderr or "")
     assert "resources" in combined
@@ -745,7 +753,7 @@ def test_cli_scan_limit_without_delete_is_allowed(make_pipeline, make_results):
     )
     results = make_results(["1.txt", "obsolete.csv"])
     result = runner.invoke(
-        app, ["scan", str(pipeline), str(results), "--limit", "1"]
+        app, ["scan", str(pipeline), str(results), "--limit", "1", "--allow-high-orphan-rate"]
     )
     assert result.exit_code == 0
 
@@ -1247,9 +1255,10 @@ def test_cli_scan_results_dir_equal_to_workdir(make_pipeline):
     result = runner.invoke(
         app,
         ["scan", str(pipeline), str(pipeline),
-         "--ignore", "Snakefile", "--ignore", ".snakemake/**"],
+         "--ignore", "Snakefile", "--ignore", ".snakemake/**",
+         "--allow-basename-mismatch"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "stale.csv" in result.stdout
     assert "1.txt" not in result.stdout
 
@@ -1679,7 +1688,8 @@ def test_cli_scan_delete_refuses_while_snakemake_locks_exist(make_pipeline, make
     assert "--allow-locked" in result.stderr
     assert (results / "junk.csv").exists()
     dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
-    assert dry.exit_code == 0
+    assert dry.exit_code == 3
+    assert dry.stdout == ""
     allowed = runner.invoke(
         app, ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-locked"]
     )
@@ -2064,11 +2074,12 @@ def test_cli_ignore_file_missing_directory_is_refused(make_pipeline, make_result
     assert "does not exist" in result.stderr
 
 
-def test_cli_ignore_file_unmatched_glob_warns_then_refuses_delete(make_pipeline, make_results):
+def test_cli_ignore_file_unmatched_glob_warns_and_refuses(make_pipeline, make_results):
     pipeline = make_pipeline(_ONE_RULE)
     results = _with_ignore_file(make_results(_LIVE + ["keep.lgo", "junk.csv"]), "*.log\n")
     dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
-    assert dry.exit_code == 0, dry.output
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
     assert "matched no scanned file" in dry.stderr and "line 1: *.log" in dry.stderr
     wet = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert wet.exit_code == 3
@@ -2099,13 +2110,13 @@ def test_cli_ignore_file_in_parent_refuses_deleting_a_subdirectory(make_pipeline
     assert (sub / "old.csv").exists()
 
 
-def test_cli_nested_ignore_file_is_not_an_orphan_and_refuses_delete(make_pipeline, make_results):
+def test_cli_nested_ignore_file_is_not_an_orphan_and_refuses(make_pipeline, make_results):
     pipeline = make_pipeline(_ONE_RULE)
     results = make_results(_LIVE + ["sub/keep.csv", "junk.csv"])
     (results / "sub" / ".snakepruneignore").write_text("keep.csv\n")
     dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
-    assert dry.exit_code == 0, dry.output
-    assert ".snakepruneignore" not in dry.stdout
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
     assert "nested ones are not applied" in dry.stderr
     wet = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert wet.exit_code == 3
@@ -2410,3 +2421,112 @@ def test_cli_orphan_rate_ignores_files_kept_only_as_inputs(make_pipeline, make_r
     assert result.exit_code == 3, result.output
     assert "67% of scanned files" in result.stderr or "(2 of 3)" in result.stderr
     assert (results / "o1.csv").exists()
+
+
+def test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout(make_pipeline, make_results):
+    # A dry run lists exactly what --delete would remove; --delete would
+    # refuse this, so the dry run refuses too rather than print a list.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(["1.txt", "o1.csv", "o2.csv"])
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "Refusing to list orphans: orphan rate exceeded threshold" in dry.stderr
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-high-orphan-rate"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert sorted(allowed.stdout.split()) == [
+        str(results / "o1.csv"), str(results / "o2.csv"),
+    ]
+
+
+def test_cli_summary_refusal_still_prints_table_on_stderr(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(["1.txt", "old/o1.csv", "old/o2.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--summary"])
+    assert result.exit_code == 3, result.output
+    assert result.stdout == ""
+    assert "(total)" in result.stderr
+    assert "orphan rate exceeded threshold" in result.stderr
+
+
+def test_cli_dry_run_refuses_while_snakemake_locks_exist(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    locks = pipeline / ".snakemake" / "locks"
+    locks.mkdir(parents=True)
+    (locks / "0.output.lock").touch()
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "--allow-locked" in dry.stderr
+    allowed = runner.invoke(app, ["scan", str(pipeline), str(results), "--allow-locked"])
+    assert allowed.exit_code == 0, allowed.output
+    assert allowed.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_cli_dry_run_refuses_nested_ignore_file(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/precious.dat", "junk.csv"])
+    (results / "sub" / ".snakepruneignore").write_text("precious.dat\n")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "nested" in dry.stderr
+
+
+def test_cli_dry_run_refuses_unmatched_ignore_glob(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE + ["keep.lgo", "junk.csv"]), "*.log\n")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "matched no scanned file" in dry.stderr
+
+
+def test_cli_dry_run_refuses_ancestor_ignore_file(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE + ["_snap/old.csv"]), "_snap/\n")
+    dry = runner.invoke(
+        app, ["scan", str(pipeline), str(results / "_snap"), "--allow-basename-mismatch"]
+    )
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+
+
+def test_cli_dry_run_refuses_naughty_dir_unless_allowed(make_pipeline, tmp_path):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'config/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    config = tmp_path / "config"
+    config.mkdir()
+    for n in ("1", "2", "3"):
+        (config / f"{n}.txt").touch()
+    (config / "samples.tsv").touch()
+    dry = runner.invoke(app, ["scan", str(pipeline), str(config)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "--allow-naughty-dir" in dry.stderr
+    allowed = runner.invoke(app, ["scan", str(pipeline), str(config), "--allow-naughty-dir"])
+    assert allowed.exit_code == 0, allowed.output
+    assert allowed.stdout.split() == [str(config / "samples.tsv")]
+
+
+def test_cli_dry_run_refuses_scanning_the_workdir(make_pipeline):
+    pipeline = make_pipeline(_ONE_RULE)
+    (pipeline / "results").mkdir()
+    dry = runner.invoke(app, ["scan", str(pipeline), str(pipeline)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "working directory" in dry.stderr
+
+
+def test_cli_dry_run_refuses_filesystem_root(make_pipeline):
+    pipeline = make_pipeline(_ONE_RULE)
+    result = runner.invoke(app, ["scan", str(pipeline), os.sep])
+    assert result.exit_code == 3, result.output
+    assert result.stdout == ""
+    assert "filesystem root" in result.stderr
