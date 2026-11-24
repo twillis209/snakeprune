@@ -2641,3 +2641,55 @@ def test_cli_top_level_ignore_variant_that_was_not_loaded_refuses(
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert result.exit_code == 3, result.output
     assert (results / "junk.csv").exists()
+
+
+def test_cli_absolute_output_with_wildcard_dir_through_symlink_refuses(make_pipeline, tmp_path):
+    # <base>/pa is a symlink to the project, so `<base>/p{x}/results/live.dat`
+    # with x=a names the scanned results/live.dat; the text alone cannot
+    # show that, so a wildcard in a directory part of an absolute path that
+    # does not lie under the results dir as written refuses.
+    project = tmp_path / "project"
+    results = project / "results"
+    results.mkdir(parents=True)
+    for name in _LIVE + ["live.dat"]:
+        (results / name).touch()
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "pa").symlink_to(project)
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        f"    output: '{base}/p{{x}}/results/live.dat'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4, result.output
+    assert result.stdout == ""
+    assert "rule `b`" in result.stderr.lower() or "Rule `b`" in result.stderr
+    assert "--allow-wildcard-absolute-paths" in result.stderr
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-wildcard-absolute-paths"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert "WARNING" in allowed.stderr
+
+
+def test_cli_absolute_input_with_wildcard_dir_has_an_override(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: '/nowhere/{s}/raw/x.fq'\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(_LIVE + ["junk.csv"])
+    refused = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert refused.exit_code == 4, refused.output
+    assert "input `/nowhere/{s}/raw/x.fq`" in refused.stderr
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-wildcard-absolute-paths"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert allowed.stdout.split() == [str(results / "junk.csv")]
+    assert "/nowhere/{s}/raw/x.fq" in allowed.stderr

@@ -289,6 +289,15 @@ def scan(
         min=1,
         help="Directory levels below results_dir to group by in --summary.",
     ),
+    allow_wildcard_absolute_paths: bool = typer.Option(
+        False,
+        "--allow-wildcard-absolute-paths",
+        help="Drop, with a warning, absolute rule paths outside the results "
+             "dir that have a wildcard in a directory part, instead of "
+             "refusing (exit 4). Any live file such a path names inside the "
+             "results dir (via a wildcard value or symlink) is then listed "
+             "as an orphan.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -446,6 +455,7 @@ def scan(
             on_warning=lambda msg: typer.echo(msg, err=True),
             results_dir=results_dir,
             match_prefix=match_prefix,
+            allow_wildcard_absolute=allow_wildcard_absolute_paths,
         )
         input_patterns = build_input_patterns(
             extracted.rules,
@@ -453,6 +463,8 @@ def scan(
             default_wildcard_regex=wildcard_regex,
             results_dir=results_dir,
             match_prefix=match_prefix,
+            allow_wildcard_absolute=allow_wildcard_absolute_paths,
+            on_warning=lambda msg: typer.echo(msg, err=True),
         )
         if not permissive_wildcards:
             # Same rules with Snakemake's own `.+`: an orphan that matches
@@ -463,6 +475,7 @@ def scan(
                 default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
                 results_dir=results_dir,
                 match_prefix=match_prefix,
+                allow_wildcard_absolute=allow_wildcard_absolute_paths,
             )
             permissive_inputs = build_input_patterns(
                 extracted.rules,
@@ -470,6 +483,7 @@ def scan(
                 default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
                 results_dir=results_dir,
                 match_prefix=match_prefix,
+                allow_wildcard_absolute=allow_wildcard_absolute_paths,
             )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)

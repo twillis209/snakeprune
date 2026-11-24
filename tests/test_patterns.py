@@ -1182,3 +1182,33 @@ def test_log_paths_widen_the_union_since_they_decide_job_wildcards():
     out, log = [rx for _, rx in _brp([spec], Path("/wd"))]
     assert out.match("results/A1.txt") and out.match("results/ab.txt")
     assert log.match("results/logs/A1.log")
+
+
+def test_absolute_output_with_wildcard_only_in_final_component_is_dropped():
+    # `/data/p1/res{x}.txt` can never name a file inside /data/p1/results,
+    # though its text is a prefix of that directory's path.
+    warnings: list[str] = []
+    pats, _ = _build(outputs=["/data/p1/res{x}.txt"], warnings=warnings)
+    assert pats == [] and len(warnings) == 1
+
+
+def test_absolute_input_with_wildcard_directory_elsewhere_is_refused():
+    # `/data/{p}/raw/x.fq` could reach the results tree through a symlink or
+    # a wildcard value; snakeprune cannot tell, so it refuses by default.
+    with pytest.raises(_PatternError, match="--allow-wildcard-absolute-paths"):
+        _build(outputs=["results/{p}.txt"], inputs=["/data/{p}/raw/x.fq"],
+               results_dir="/elsewhere/projA/results")
+
+
+def test_allow_wildcard_absolute_paths_skips_with_a_warning():
+    spec = RuleSpec(name="r", outputs=["results/{p}.txt", "/data/{p}/out/{p}.log"],
+                    constraints={}, inputs=["/data/{p}/raw/x.fq"])
+    warnings: list[str] = []
+    pats = _brp([spec], Path("/wd"), on_warning=warnings.append,
+                results_dir=Path("/elsewhere/results"), match_prefix="results/",
+                allow_wildcard_absolute=True)
+    m = build_input_patterns([spec], Path("/wd"), results_dir=Path("/elsewhere/results"),
+                             match_prefix="results/", allow_wildcard_absolute=True,
+                             on_warning=warnings.append)
+    assert [n for n, _ in pats] == ["r"] and len(m) == 0
+    assert len(warnings) == 2 and all("rule `r`" in w for w in warnings)
