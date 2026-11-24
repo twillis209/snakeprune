@@ -2807,3 +2807,51 @@ def test_cli_limit_counts_only_listed_deletable_orphans(make_pipeline, make_resu
     listed = result.stdout.split()
     assert len(listed) == 2 and all(p.endswith(".csv") for p in listed)
     assert "1 more deletable orphan(s) not listed" in result.stderr
+
+
+@pytest.mark.parametrize("how", ["input", "directory_output"])
+def test_cli_literal_absolute_path_that_is_a_symlink_into_results_is_live(
+    make_pipeline, make_results, tmp_path, how
+):
+    # <ext>/link -> results/sub: the rule path names results/sub, so its
+    # contents are live, though the path's parent is outside the tree.
+    results = make_results(_LIVE + ["sub/in1", "junk.csv"])
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    (ext / "link").symlink_to(results / "sub")
+    if how == "input":
+        rule = (
+            "rule b:\n"
+            f"    input: '{ext}/link'\n"
+            "    output: 'results/b.done'\n"
+            "    shell: 'touch {output}'\n"
+        )
+    else:
+        rule = (
+            "rule b:\n"
+            f"    output: directory('{ext}/link')\n"
+            "    shell: 'true'\n"
+        )
+    pipeline = make_pipeline(_ONE_RULE + rule)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_cli_literal_absolute_input_that_is_a_symlink_to_results_protects_all(
+    make_pipeline, make_results, tmp_path
+):
+    results = make_results(_LIVE + ["junk.csv"])
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    (ext / "link").symlink_to(results)
+    pipeline = make_pipeline(
+        _ONE_RULE
+        + "rule b:\n"
+        f"    input: '{ext}/link'\n"
+        "    output: 'results/b.done'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""

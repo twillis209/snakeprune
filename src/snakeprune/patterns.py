@@ -406,6 +406,11 @@ def _rewrite_under_results_dir(
     literal = path if cut == -1 else path[:cut]
     literal_dir = literal[: literal.rfind("/")]
     resolved = os.path.realpath(literal_dir or "/").rstrip("/") + path[len(literal_dir) :]
+    candidates = [nfc(path), nfc(resolved)]
+    if cut == -1:
+        # A fully literal path may itself be a symlink into the tree
+        # (`<ext>/link -> <results>/sub`); resolve every component.
+        candidates.append(nfc(os.path.realpath(path)))
     # Compared in NFC: the rule text and the on-disk spelling may differ in form.
     # A spelling that differs only in letter case counts only where the
     # filesystem agrees it is the same directory (case-insensitive ones,
@@ -413,8 +418,11 @@ def _rewrite_under_results_dir(
     # directory, and mapping it would let the "no rule writes here" guard
     # pass on a path no rule writes to.
     bases = (nfc(os.path.abspath(results_dir)), nfc(os.path.realpath(results_dir)))
-    for candidate in dict.fromkeys((nfc(path), nfc(resolved))):
+    for candidate in dict.fromkeys(candidates):
         for base in bases:
+            if candidate == base and match_prefix:
+                # Names the results dir itself (e.g. a symlink to it).
+                return match_prefix.rstrip("/")
             head = candidate[: len(base) + 1]
             if head == base + "/":
                 return match_prefix + candidate[len(base) + 1 :]
