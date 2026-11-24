@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **327 tests**, split across six files:
+As of this writing the suite is **331 tests**, split across six files:
 
-- `tests/test_patterns.py` (104) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (106) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (152) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (154) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore
@@ -406,7 +406,9 @@ before its fix:
   `test_cli_nested_ignore_file_case_variant_refuses`,
   `test_cli_top_level_ignore_file_case_variant_is_honoured_not_listed`,
   `test_cli_second_top_level_ignore_file_variant_refuses` — the last two
-  skip on case-sensitive and case-insensitive filesystems respectively).
+  skip on case-sensitive and case-insensitive filesystems respectively —
+  and `test_cli_top_level_ignore_variant_that_was_not_loaded_refuses`, which
+  runs anywhere).
 - **Wildcard constraints are a union over the outputs.** Every output, log,
   benchmark and input of a rule accepts, for each wildcard, the union of its
   constraints over the rule's outputs, as Snakemake formats every path with
@@ -416,7 +418,12 @@ before its fix:
   `test_output_union_keeps_constraint_that_spans_slash_in_strict_build`,
   `test_single_constraint_regex_is_unchanged`,
   `test_cli_inputs_and_outputs_take_union_of_output_constraints`,
-  `test_cli_explainer_names_wildcard_left_free_by_one_output`).
+  `test_cli_explainer_names_wildcard_left_free_by_one_output`). Logs and
+  benchmarks are never matched to pick a job, so they do not widen the union,
+  but still accept their own constraints
+  (`test_log_paths_do_not_widen_the_union_but_keep_their_own_constraint`,
+  `test_run_extractor_marks_log_and_benchmark_paths`,
+  `test_cli_log_without_inline_constraint_does_not_widen_outputs`).
 - **A dry run refuses wherever `--delete` would refuse over live files**,
   with exit 3 and an empty stdout; `--summary` still prints its table on
   stderr (`test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout`,
