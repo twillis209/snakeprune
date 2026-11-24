@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **243 tests**, split across five files:
+As of this writing the suite is **246 tests**, split across five files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
-- `tests/test_delete.py` (18) — does the deletion primitive refuse the things
+- `tests/test_delete.py` (20) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (111) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (112) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_report.py` (8) — does the on-disk orphan list return exactly
   what was written, and do the summary and wildcard report count correctly?
@@ -293,9 +293,12 @@ genuinely mean it.
    (`test_delete_orphans_mid_batch_failure_reports_progress`,
    `test_cli_scan_delete_partial_failure_exits_5_with_count`).
 
-13. **`--summary` never deletes.** Combined with `--delete` or `--trash` it is
-   refused (exit 3) and nothing is touched, because a per-directory table hides
-   which files would go (`test_cli_scan_summary_refuses_deletion`, both flags).
+13. **`--summary` never deletes and never writes paths to stdout.** Combined
+   with `--delete` or `--trash` it is refused (exit 3) and nothing is touched,
+   because a per-directory table hides which files would go
+   (`test_cli_scan_summary_refuses_deletion`, both flags). The table goes to
+   stderr and stdout stays empty, so it cannot be piped into `rm`
+   (`test_cli_scan_summary_replaces_per_file_listing`).
 
 14. **The deletion list is never partial or garbled.** Orphans are spooled to a
    temporary file; names with newlines, tabs, decomposed accents and
@@ -304,13 +307,17 @@ genuinely mean it.
    `test_cli_scan_deletes_file_with_newline_in_name`), a truncated spool raises
    rather than yielding a short list (`test_spool_truncation_raises`), and a
    failed spool write exits 3 with nothing deleted
-   (`test_cli_scan_spool_write_failure_deletes_nothing`).
+   (`test_cli_scan_spool_write_failure_deletes_nothing`). Deleting from a
+   re-iterable (spooled) input still validates every entry before removing
+   the first (`test_delete_orphans_reiterable_validation_failure_deletes_nothing`).
 
 15. **The wildcard report's advice works.** For a rule with two adjacent
    unconstrained wildcards, the report names both
    (`test_cli_scan_names_rule_and_all_unconstrained_wildcards`); constraining
    only one leaves the stale file ambiguous, and constraining both makes it an
    ordinary orphan (`test_cli_scan_following_the_wildcard_advice_makes_a_plain_orphan`).
+   A wildcard explicitly constrained to `.+` is not reported as unconstrained
+   (`test_cli_scan_explicit_dotplus_constraint_not_reported_unconstrained`).
 
 ## The headline data-loss invariants
 

@@ -1922,9 +1922,11 @@ def test_cli_scan_summary_replaces_per_file_listing(make_pipeline, make_results)
     results = make_results(_LIVE + ["sub/6.txt", "sub/deep/7.csv", "junk.csv"])
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--summary"])
     assert result.exit_code == 0, result.output
-    assert str(results) not in result.stdout
+    # stdout is reserved for deletable paths; the table must not be pipeable.
+    assert result.stdout == ""
     assert "ambiguous: " not in result.stderr
-    rows = {l.split()[-1]: l.split()[:2] for l in result.stdout.splitlines()[1:]}
+    table = result.stderr[result.stderr.index("deletable"):].splitlines()
+    rows = {l.split()[-1]: l.split()[:2] for l in table[1:] if l.startswith(" ")}
     assert rows["sub/"] == ["0", "1"]
     assert rows["sub/deep/"] == ["1", "0"]
     assert rows["./"] == ["1", "0"]
@@ -1941,7 +1943,9 @@ def test_cli_scan_summary_depth_and_delete_ambiguous(make_pipeline, make_results
          "--delete-ambiguous"],
     )
     assert result.exit_code == 0, result.output
-    rows = {l.split()[-1]: l.split()[:2] for l in result.stdout.splitlines()[1:]}
+    assert result.stdout == ""
+    table = result.stderr[result.stderr.index("deletable"):].splitlines()
+    rows = {l.split()[-1]: l.split()[:2] for l in table[1:] if l.startswith(" ")}
     # Ambiguous files count as deletable when --delete-ambiguous is set.
     assert rows["sub/"] == ["2", "0"]
 
@@ -1991,3 +1995,19 @@ def test_cli_scan_deletes_file_with_newline_in_name(make_pipeline, make_results)
     assert result.exit_code == 0, result.output
     assert not (results / "odd\nname.csv").exists()
     assert all((results / f).exists() for f in _LIVE)
+
+
+def test_cli_scan_explicit_dotplus_constraint_not_reported_unconstrained(make_pipeline, make_results):
+    # {pc} is deliberately `.+`; only {eqtl} lacks a constraint, so only it
+    # can make a/fixed/b/c/x.csv ambiguous, and only it is named.
+    pipeline = make_pipeline(
+        "rule fit:\n"
+        "    output: 'results/{pc,.+}/fixed/{eqtl}/x.csv'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    live = [f"{i}/fixed/{i}/x.csv" for i in range(5)]
+    results = make_results(live + ["a/fixed/b/c/x.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert f"ambiguous: {results / 'a/fixed/b/c/x.csv'}" in result.stderr
+    assert "fit: 1 file(s); unconstrained: {eqtl}\n" in result.stderr

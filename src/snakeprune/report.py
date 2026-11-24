@@ -16,7 +16,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from snakeprune.patterns import SNAKEMAKE_WILDCARD_REGEX, extract_literal_prefix
+from snakeprune.patterns import (
+    DEFAULT_WILDCARD_REGEX,
+    SNAKEMAKE_WILDCARD_REGEX,
+    extract_literal_prefix,
+)
 from snakeprune.walker import OrphanFile
 
 # Record: flags (B), path length (I), offset of rel within path (I),
@@ -180,38 +184,48 @@ class _Explanation:
 class AmbiguityExplainer:
     """Attribute ambiguous orphans to the rule pattern that claims them.
 
-    ``patterns`` are the permissive (``.+``) rule patterns. For each ambiguous
-    orphan the explainer finds the pattern that matches and records every
-    wildcard in it that has no constraint, because any of them may be the one
-    absorbing the extra directory level: in ``{a}/{b}`` with both
-    unconstrained, constraining only ``a`` leaves ``b`` free to span ``/``.
+    ``patterns`` are the permissive (``.+``) rule patterns and ``strict``
+    the same rules built with the default ``[^/]+``, in the same order. For
+    each ambiguous orphan the explainer finds the first pattern that matches
+    and records every wildcard in it that has no constraint, because any of
+    them may be the one absorbing the extra directory level: in ``{a}/{b}``
+    with both unconstrained, constraining only ``a`` leaves ``b`` free to
+    span ``/``. A wildcard is unconstrained when its group body is the
+    default in both builds, so one explicitly constrained to ``.+`` is not
+    reported.
     """
 
     MAX_SHOWN = 20
 
-    def __init__(self, patterns: list[tuple[str, re.Pattern]]) -> None:
-        self._patterns = [
-            (name, rx, extract_literal_prefix(rx), self._unconstrained(rx))
-            for name, rx in patterns
-        ]
-        self._last: int | None = None
+    def __init__(
+        self,
+        patterns: list[tuple[str, re.Pattern]],
+        strict: list[tuple[str, re.Pattern]] | None = None,
+    ) -> None:
+        aligned = strict is not None and len(strict) == len(patterns) and all(
+            a[0] == b[0] for a, b in zip(strict, patterns)
+        )
+        self._patterns = []
+        for i, (name, rx) in enumerate(patterns):
+            free = self._groups_with_body(rx, SNAKEMAKE_WILDCARD_REGEX)
+            if aligned:
+                assert strict is not None
+                default = set(self._groups_with_body(strict[i][1], DEFAULT_WILDCARD_REGEX))
+                free = tuple(w for w in free if w in default)
+            self._patterns.append((name, rx, extract_literal_prefix(rx), free))
         self._found: dict[tuple[str, tuple[str, ...]], _Explanation] = {}
 
     @staticmethod
-    def _unconstrained(rx: re.Pattern) -> tuple[str, ...]:
-        body = re.escape(SNAKEMAKE_WILDCARD_REGEX)
+    def _groups_with_body(rx: re.Pattern, body: str) -> tuple[str, ...]:
+        escaped = re.escape(body)
         return tuple(
             m.group(1)
-            for m in re.finditer(r"\(\?P<(\w+)>" + body + r"\)", rx.pattern)
+            for m in re.finditer(r"\(\?P<(\w+)>" + escaped + r"\)", rx.pattern)
         )
 
     def _find(self, targets: list[str]) -> tuple[int, re.Match[str]] | None:
-        if self._last is not None:
-            rx = self._patterns[self._last][1]
-            for t in targets:
-                m = rx.match(t)
-                if m:
-                    return self._last, m
+        # First matching rule in workflow order, so attribution does not
+        # depend on the order files are walked.
         for t in targets:
             for i, (_, rx, prefix, _) in enumerate(self._patterns):
                 if t.startswith(prefix):
@@ -225,7 +239,6 @@ class AmbiguityExplainer:
         if hit is None:
             return
         index, match = hit
-        self._last = index
         name, _, _, unconstrained = self._patterns[index]
         key = (name, unconstrained)
         entry = self._found.get(key)

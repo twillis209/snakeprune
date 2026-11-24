@@ -326,3 +326,45 @@ def test_delete_orphans_trash_refuses_dangling_symlink_ancestor(tmp_path):
             results_dir_name="src",
         )
     assert b.exists()
+
+
+class _Reiterable:
+    """Re-iterable, like the CLI's spooled selection; never a list."""
+
+    def __init__(self, items):
+        self._items = items
+        self.passes = 0
+
+    def __iter__(self):
+        self.passes += 1
+        return iter(list(self._items))
+
+
+def test_delete_orphans_reiterable_validation_failure_deletes_nothing(tmp_path):
+    from snakeprune.delete import delete_orphans
+    from snakeprune.walker import OrphanFile
+
+    good = [tmp_path / f"f{i}.txt" for i in range(3)]
+    for g in good:
+        g.write_text("x")
+    bad = tmp_path / "dir"
+    bad.mkdir()
+    items = _Reiterable(
+        [OrphanFile(path=g, rel=g.name) for g in good] + [OrphanFile(path=bad, rel="dir")]
+    )
+    with pytest.raises(IsADirectoryError):
+        delete_orphans(items)
+    assert all(g.exists() for g in good)
+
+
+def test_delete_orphans_reiterable_deletes_all(tmp_path):
+    from snakeprune.delete import delete_orphans
+    from snakeprune.walker import OrphanFile
+
+    files = [tmp_path / f"f{i}.txt" for i in range(3)]
+    for f in files:
+        f.write_text("x")
+    items = _Reiterable([OrphanFile(path=f, rel=f.name) for f in files])
+    delete_orphans(items)
+    assert not any(f.exists() for f in files)
+    assert items.passes >= 2  # validated in full, then acted on

@@ -496,45 +496,17 @@ def _scan_and_report(
     target_prefixes = [match_prefix]
     if basename_prefix != match_prefix:
         target_prefixes.append(basename_prefix)
-    explainer = AmbiguityExplainer(permissive_patterns) if permissive_patterns else None
+    explainer = (
+        AmbiguityExplainer(permissive_patterns, strict=patterns)
+        if permissive_patterns
+        else None
+    )
     dir_summary = DirectorySummary(summary_depth) if summary else None
     walk_stats: dict = {}
-    try:
-        for full_path, rel in iter_results_files(
-            results_dir,
-            ignore_globs=tuple(ignore or ()),
-            follow_symlinks=follow_symlinks,
-            exclude_dirs=tuple(set(exclude_dirs)),
-            stats=walk_stats,
-        ):
-            if limit is not None and file_count >= limit:
-                break
-            file_count += 1
-            if file_count % PROGRESS_INTERVAL == 0:
-                log(f"  scanned {file_count} files...")
-            # Rule paths are NFC-normalised; some filesystems store names decomposed.
-            norm_rel = nfc(rel)
-            targets = [tp + norm_rel for tp in target_prefixes]
-            if combined is not None and any(combined.match(t) for t in targets):
-                continue
-            ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
-            if ambiguous and explainer is not None:
-                explainer.add(rel, targets)
-            likely = None
-            if rule_attribution:
-                for t in targets:
-                    likely = attribute_orphan_to_rule(t, patterns, prefixes)
-                    if likely:
-                        break
-            spool.add(full_path, rel, ambiguous, likely)
-            if dir_summary is not None:
-                try:
-                    size = os.lstat(full_path).st_size
-                except OSError:
-                    size = 0
-                dir_summary.add(rel, deletable=delete_ambiguous or not ambiguous, size=size)
-        spool.finish()
-    except OSError as exc:
+    n_orphans = 0
+    n_ambiguous = 0
+
+    def _spool_failed(exc: OSError) -> typer.Exit:
         # The spool is the deletion list; never act on a partial one.
         typer.echo(
             f"Refusing to continue: could not record the orphan list in a "
@@ -542,9 +514,52 @@ def _scan_and_report(
             f"filesystem with free space.",
             err=True,
         )
-        raise typer.Exit(code=3)
-    n_orphans = spool.count
-    n_ambiguous = spool.ambiguous_count
+        return typer.Exit(code=3)
+
+    for full_path, rel in iter_results_files(
+        results_dir,
+        ignore_globs=tuple(ignore or ()),
+        follow_symlinks=follow_symlinks,
+        exclude_dirs=tuple(set(exclude_dirs)),
+        stats=walk_stats,
+    ):
+        if limit is not None and file_count >= limit:
+            break
+        file_count += 1
+        if file_count % PROGRESS_INTERVAL == 0:
+            log(f"  scanned {file_count} files...")
+        # Rule paths are NFC-normalised; some filesystems store names decomposed.
+        norm_rel = nfc(rel)
+        targets = [tp + norm_rel for tp in target_prefixes]
+        if combined is not None and any(combined.match(t) for t in targets):
+            continue
+        ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
+        n_orphans += 1
+        n_ambiguous += ambiguous
+        if ambiguous and explainer is not None:
+            explainer.add(rel, targets)
+        if dir_summary is not None:
+            # Summary mode never deletes or lists files, so nothing is spooled.
+            try:
+                size = os.lstat(full_path).st_size
+            except OSError:
+                size = 0
+            dir_summary.add(rel, deletable=delete_ambiguous or not ambiguous, size=size)
+            continue
+        likely = None
+        if rule_attribution:
+            for t in targets:
+                likely = attribute_orphan_to_rule(t, patterns, prefixes)
+                if likely:
+                    break
+        try:
+            spool.add(full_path, rel, ambiguous, likely)
+        except OSError as exc:
+            raise _spool_failed(exc)
+    try:
+        spool.finish()
+    except OSError as exc:
+        raise _spool_failed(exc)
     log(f"Scanned {file_count} file(s); found {n_orphans} orphan(s).")
 
     skipped_dirs = walk_stats.get("skipped_symlinked_dirs", 0)
@@ -578,8 +593,10 @@ def _scan_and_report(
             )
 
     if dir_summary is not None:
+        # stderr, not stdout: stdout is reserved for paths that would be
+        # deleted, and a directory column piped into `rm -r` would be a disaster.
         for line in dir_summary.render():
-            typer.echo(line)
+            typer.echo(line, err=True)
     else:
         # stdout carries exactly the files --delete would remove, so a held-back
         # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
@@ -662,3 +679,13 @@ def _scan_and_report(
         except (PermissionError, IsADirectoryError, FileExistsError) as exc:
             typer.echo(f"Refusing to delete: {exc}", err=True)
             raise typer.Exit(code=3)
+        except OSError as exc:
+            # Reading the spooled list failed mid-batch. Every file already
+            # removed was in the deletion set; the rest were not touched.
+            typer.echo(
+                f"Stopped: could not read the orphan list back from its "
+                f"temporary file ({exc}). Files listed under `deleting:` "
+                f"above are gone; the rest were not touched.",
+                err=True,
+            )
+            raise typer.Exit(code=5)
