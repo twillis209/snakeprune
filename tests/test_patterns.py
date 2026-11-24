@@ -1049,3 +1049,70 @@ def test_single_constraint_regex_is_unchanged():
     assert a.pattern == r"^results/(?P<s>\d+)\.a$"
     (b,) = _out_patterns(["results/{s}.b"])
     assert b.pattern == r"^results/(?P<s>[^/]+)\.b$"
+
+
+from snakeprune.patterns import PatternError as _PatternError, build_input_patterns
+
+
+def _build(outputs=(), inputs=(), results_dir="/data/p1/results", match_prefix="results/",
+           warnings=None, directories=()):
+    spec = RuleSpec(name="r", outputs=list(outputs), constraints={},
+                    inputs=list(inputs), directories=list(directories))
+    pats = _brp([spec], Path("/wd"), on_warning=(warnings.append if warnings is not None else None),
+                results_dir=Path(results_dir), match_prefix=match_prefix)
+    m = build_input_patterns([spec], Path("/wd"), results_dir=Path(results_dir),
+                             match_prefix=match_prefix)
+    return pats, m
+
+
+def test_absolute_output_with_wildcard_above_results_dir_is_refused():
+    # With proj=p1 this names files inside the results dir, which a dropped
+    # pattern would let be listed as orphans.
+    with pytest.raises(_PatternError, match="[Rr]ule `r`"):
+        _build(outputs=["/data/{proj}/results/{s}.txt"])
+
+
+def test_absolute_directory_output_containing_results_dir_is_refused():
+    with pytest.raises(_PatternError):
+        _build(outputs=["/data/p1"], directories=["/data/p1"])
+
+
+def test_absolute_output_outside_results_dir_is_still_dropped_with_warning():
+    warnings: list[str] = []
+    pats, _ = _build(outputs=["/data/raw/{s}.txt", "/data/p1/res/{s}.txt"], warnings=warnings)
+    assert pats == [] and len(warnings) == 2
+
+
+def test_absolute_output_differing_only_in_case_is_mapped_under_results_dir():
+    pats, _ = _build(outputs=["/DATA/P1/Results/{s}.txt"])
+    assert [rx.pattern for _, rx in pats] == [r"^results/(?P<s>[^/]+)\.txt$"]
+
+
+def test_absolute_input_with_wildcard_above_results_dir_is_refused():
+    with pytest.raises(_PatternError, match="input"):
+        _build(outputs=["results/{proj}/{s}.txt"], inputs=["/data/{proj}/results/{s}.in"])
+
+
+def test_absolute_input_outside_results_dir_is_skipped_silently():
+    _, m = _build(outputs=["results/{s}.txt"], inputs=["/data/raw/{s}.fq", "/ref/genome.fa"])
+    assert len(m) == 0
+
+
+def test_unparseable_input_inside_results_tree_is_refused():
+    with pytest.raises(_PatternError, match="rule `r`"):
+        _build(outputs=["results/{s}.txt"], inputs=["results/{s.in"])
+
+
+def test_unparseable_input_outside_results_tree_is_skipped():
+    _, m = _build(outputs=["results/{s}.txt"], inputs=["resources/{s.in"])
+    assert len(m) == 0
+
+
+def test_input_with_unresolvable_dotdot_is_refused():
+    with pytest.raises(_PatternError, match=r"\.\."):
+        _build(outputs=["results/{s}.txt"], inputs=["resources/{s}/../../results/x.in"])
+
+
+def test_input_naming_the_working_directory_is_refused():
+    with pytest.raises(_PatternError):
+        _build(outputs=["results/{s}.txt"], inputs=["."])

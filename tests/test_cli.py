@@ -2562,3 +2562,21 @@ def test_cli_explainer_names_wildcard_left_free_by_one_output(make_pipeline, mak
     assert result.exit_code == 0, result.output
     assert f"ambiguous: {results / 'x/y.b'}" in result.stderr
     assert "a: 1 file(s); unconstrained: {s}\n" in result.stderr
+
+
+def test_cli_absolute_input_that_may_lie_in_results_refuses(make_pipeline, tmp_path):
+    # {proj}=results would make this input a file in the scanned tree; it
+    # cannot be turned into a pattern there, so the scan is refused (exit 4).
+    pipeline = make_pipeline(
+        "rule a:\n"
+        f"    input: '{tmp_path}/{{proj}}/{{s}}.in'\n"
+        "    output: 'results/{proj}_{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "x.in").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4, result.output
+    assert "rule `a`" in result.stderr and "input" in result.stderr
+    assert result.stdout == ""

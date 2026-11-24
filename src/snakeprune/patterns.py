@@ -405,12 +405,68 @@ def _rewrite_under_results_dir(
     literal_dir = literal[: literal.rfind("/")]
     resolved = os.path.realpath(literal_dir or "/").rstrip("/") + path[len(literal_dir) :]
     # Compared in NFC: the rule text and the on-disk spelling may differ in form.
+    # Also compared ignoring letter case: on a case-insensitive filesystem
+    # `/Data/Results/x` is a file under `/data/results`, and on a
+    # case-sensitive one treating it as such only protects more files.
     bases = (nfc(os.path.abspath(results_dir)), nfc(os.path.realpath(results_dir)))
     for candidate in dict.fromkeys((nfc(path), nfc(resolved))):
         for base in bases:
-            if candidate.startswith(base + "/"):
+            head = candidate[: len(base) + 1]
+            if head == base + "/" or head.casefold() == (base + "/").casefold():
                 return match_prefix + candidate[len(base) + 1 :]
     return None
+
+
+def _literal_head(path: str) -> tuple[str, bool]:
+    """Text of `path` before its first brace, and whether it had one."""
+    cut = min((i for i in (path.find("{"), path.find("}")) if i != -1), default=-1)
+    return (path, False) if cut == -1 else (path[:cut], True)
+
+
+def _may_lie_in_results(
+    path: str,
+    results_dir: Path | None,
+    match_prefix: str | None,
+    contains: bool,
+) -> bool:
+    """Whether a rule path snakeprune cannot match may name a scanned file.
+
+    Decided from the literal text before the first brace only, so it does
+    not depend on the wildcard default and errs towards "may":
+
+    * absolute: the literal text could continue into the results dir (a
+      wildcard above it, `/data/{proj}/results/...`), or already lies in it;
+    * relative (to the workdir): likewise against the prefixes scanned files
+      are matched under (`match_prefix` and `<results-dir-name>/`).
+
+    `contains`: the path may be a directory (a `directory()` output, or any
+    input), so naming the results dir or one of its ancestors counts too.
+    Without a `results_dir` nothing is known, and False is returned.
+    """
+    if results_dir is None:
+        return False
+    head, wild = _literal_head(nfc(path))
+    if path.startswith("/"):
+        literal_dir = head[: head.rfind("/")]
+        heads = {head, os.path.realpath(literal_dir or "/").rstrip("/") + head[len(literal_dir):]}
+        bases = {nfc(os.path.abspath(results_dir)), nfc(os.path.realpath(results_dir))}
+        bases = {b.rstrip("/") + "/" for b in bases}
+    else:
+        heads = {head}
+        if match_prefix is None:
+            match_prefix = nfc(results_dir_name(results_dir)) + "/"
+        bases = {match_prefix, nfc(results_dir_name(results_dir)) + "/"}
+    for h in heads:
+        h = h.casefold()
+        for base in bases:
+            base = base.casefold()
+            if h.startswith(base):
+                return True  # inside the results tree
+            if wild and base.startswith(h):
+                return True  # a wildcard could lead into it
+            if not wild and contains and (h in ("", ".") or base.startswith(h.rstrip("/") + "/")):
+                return True  # the working directory, the results dir or an ancestor
+    return False
 
 
 def find_rule_patterns(
@@ -486,6 +542,18 @@ def build_rule_patterns(
                     output_str, results_dir, match_prefix
                 )
                 if rewritten is None:
+                    if _may_lie_in_results(
+                        output_str, results_dir, match_prefix, contains=is_directory
+                    ):
+                        raise PatternError(
+                            f"Rule `{spec.name}` path `{raw_path}` is absolute "
+                            f"and may name files inside the scanned results "
+                            f"directory `{results_dir}` (or contain it), but "
+                            f"snakeprune cannot match it there. Refusing: "
+                            f"dropping it could list live files as orphans. "
+                            f"Write the path relative to the working directory, "
+                            f"or under the results directory as scanned."
+                        )
                     if on_warning is not None:
                         on_warning(
                             f"WARNING: dropping absolute path `{raw_path}` "
@@ -629,6 +697,14 @@ class InputMatcher:
         return None
 
 
+def _unusable_input(rule: str, raw: str, why: str) -> PatternError:
+    return PatternError(
+        f"Cannot use input `{raw}` of rule `{rule}`: {why}. It may name a "
+        f"file inside the scanned results directory, so snakeprune refuses "
+        f"rather than risk listing it as an orphan."
+    )
+
+
 def build_input_patterns(
     specs: Sequence[RuleSpec],
     workdir: Path,
@@ -644,11 +720,13 @@ def build_input_patterns(
     Input wildcards take the union of the rule's output constraints (see
     `rule_wildcard_bodies`), since their values come from matching the
     outputs. Each input also covers everything
-    beneath it, in case it is a directory. An input that cannot be turned into
-    a pattern (absolute outside the results directory, `..` after a wildcard,
-    unparseable braces) is skipped without comment: inputs routinely live
-    outside the results tree, and skipping only narrows protection the user
-    did not have before.
+    beneath it, in case it is a directory. An input outside the results tree
+    can never be deleted, so one that is absolute and lies elsewhere, or that
+    cannot be parsed but plainly lies elsewhere, is skipped without comment.
+    One that may lie inside the tree but cannot be turned into a pattern
+    (`..` after a wildcard, unparseable braces, a wildcard above the results
+    directory, the working directory itself) raises `PatternError`, as an
+    unusable output does: skipping it could list a live file as an orphan.
     """
     matcher = InputMatcher()
     for spec in specs:
@@ -657,18 +735,34 @@ def build_input_patterns(
             path, dotdot = normalise_rule_path(unicodedata.normalize("NFC", raw))
             if dotdot and path.startswith("../"):
                 path, dotdot = normalise_rule_path(str(workdir) + "/" + path)
-            if dotdot or not path:
+            if dotdot:
+                raise _unusable_input(spec.name, raw, "`..` after a wildcard cannot be resolved")
+            if not path:
+                if _may_lie_in_results(".", results_dir, match_prefix, contains=True):
+                    raise _unusable_input(
+                        spec.name, raw, "it names the working directory, which holds the results"
+                    )
                 continue
             if path.startswith("/"):
                 rewritten = _rewrite_under_results_dir(path, results_dir, match_prefix)
                 if rewritten is None:
+                    if _may_lie_in_results(path, results_dir, match_prefix, contains=True):
+                        raise _unusable_input(
+                            spec.name, raw,
+                            "it is absolute and a wildcard could lead into the "
+                            "results directory, or it contains that directory",
+                        )
                     continue
                 path = rewritten
             try:
                 matcher._add(
                     spec.name, path, spec.constraints, default_wildcard_regex, bodies
                 )
-            except (PatternError, re.error):
+            except (PatternError, re.error) as exc:
+                if _may_lie_in_results(path, results_dir, match_prefix, contains=True):
+                    raise _unusable_input(
+                        spec.name, raw, f"it cannot be turned into a pattern ({exc})"
+                    ) from None
                 continue
     matcher._finish()
     return matcher
