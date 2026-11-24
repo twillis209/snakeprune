@@ -298,7 +298,12 @@ def scan(
              "results dir (via a wildcard value or symlink) is then listed "
              "as an orphan.",
     ),
-    limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        help="List at most N orphans. The whole tree is still walked, so "
+             "every guard sees all of it. Refused with --delete/--trash.",
+    ),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
 
@@ -308,9 +313,9 @@ def scan(
 
     if limit is not None and (delete or trash is not None):
         typer.echo(
-            "Refusing to delete: --limit truncates the scan, so the orphan set "
-            "would be partial and the orphan-rate guard meaningless. Drop "
-            "--limit to delete, or drop --delete/--trash to benchmark.",
+            "Refusing to delete: --limit shows only part of the orphan list, "
+            "and deleting files you were not shown is not allowed. Drop "
+            "--limit to delete.",
             err=True,
         )
         raise typer.Exit(code=3)
@@ -653,8 +658,6 @@ def _scan_and_report(
         track_globs=[g for _, g in ignore_file.globs] if ignore_file else (),
         watch_name=IGNORE_FILE_NAME,
     ):
-        if limit is not None and file_count >= limit:
-            break
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
@@ -737,7 +740,7 @@ def _scan_and_report(
         )
 
     unmatched = []
-    if ignore_file is not None and limit is None:
+    if ignore_file is not None:
         hits = walk_stats.get("glob_hits", set())
         unmatched = [e for i, (e, _) in enumerate(ignore_file.globs) if i not in hits]
     if unmatched:
@@ -842,7 +845,16 @@ def _scan_and_report(
         # stdout carries exactly the files --delete would remove, so a held-back
         # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
         try:
+            listed = 0
             for orphan in spool.iter_orphans():
+                if limit is not None and listed >= limit:
+                    typer.echo(
+                        f"--limit {limit}: {n_orphans - listed} more orphan(s) "
+                        f"not listed.",
+                        err=True,
+                    )
+                    break
+                listed += 1
                 line = str(orphan.path)
                 if rule_attribution and orphan.likely_rule:
                     line += f"\t(likely: {orphan.likely_rule})"

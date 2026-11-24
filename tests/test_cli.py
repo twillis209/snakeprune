@@ -700,9 +700,8 @@ def test_cli_scan_symlink_orphan_delete_refuses_cleanly(
 
 
 def test_cli_scan_limit_with_delete_refuses(make_pipeline, make_results):
-    # --limit stops the scan early, so the orphan set is partial. Combining it
-    # with --delete would delete an arbitrary subset against a truncated
-    # orphan-rate denominator; the tool must refuse instead.
+    # --limit shows only part of the orphan list; deleting with it would
+    # remove files the user was never shown, so the tool refuses instead.
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{n}.txt'\n"
@@ -748,7 +747,7 @@ def test_cli_scan_limit_with_trash_refuses(make_pipeline, make_results, tmp_path
 
 
 def test_cli_scan_limit_without_delete_is_allowed(make_pipeline, make_results):
-    # --limit is a benchmarking aid for dry-run scans; on its own it stays legal.
+    # --limit caps a dry-run listing; on its own it stays legal.
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{n}.txt'\n"
@@ -2734,3 +2733,27 @@ def test_cli_dry_run_refuses_nested_ignore_file_hidden_by_ignore_glob(make_pipel
     assert dry.exit_code == 3, dry.output
     assert dry.stdout == ""
     assert "sub/.snakepruneignore" in dry.stderr
+
+
+def test_cli_limit_still_walks_everything_so_every_refusal_applies(make_pipeline, make_results):
+    # A nested ignore file sits past the first few files; --limit must not
+    # stop the walk before it is seen.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk1.csv", "zz/precious.dat"])
+    (results / "zz" / ".snakepruneignore").write_text("precious.dat\n")
+    full = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert full.exit_code == 3, full.output
+    limited = runner.invoke(app, ["scan", str(pipeline), str(results), "--limit", "3"])
+    assert limited.exit_code == 3, limited.output
+    assert limited.stdout == ""
+
+
+def test_cli_limit_caps_the_listing(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + [f"junk{i}.csv" for i in range(4)])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--limit", "2", "--allow-high-orphan-rate"]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(result.stdout.split()) == 2
+    assert "Scanned 9 file(s); found 4 orphan(s)." in result.stderr
