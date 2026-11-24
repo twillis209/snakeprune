@@ -155,6 +155,13 @@ def _is_inside(path: Path, directory: Path) -> bool:
     return False
 
 
+def _same_file(a, b) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def _stdin_isatty() -> bool:
     """Return whether stdin is a TTY.  Thin wrapper so tests can monkeypatch it."""
     return sys.stdin.isatty()
@@ -616,16 +623,10 @@ def _scan_and_report(
         exclude_dirs=tuple(set(exclude_dirs)),
         stats=walk_stats,
         track_globs=[g for _, g in ignore_file.globs] if ignore_file else (),
+        watch_name=IGNORE_FILE_NAME,
     ):
         if limit is not None and file_count >= limit:
             break
-        if rel == IGNORE_FILE_NAME or rel.endswith("/" + IGNORE_FILE_NAME):
-            # An ignore file is never an orphan. Only the top-level one is
-            # read, so a nested one is a protection the user expects but
-            # does not have.
-            if rel != IGNORE_FILE_NAME:
-                nested_ignore_files.append(rel)
-            continue
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
@@ -668,6 +669,14 @@ def _scan_and_report(
         spool.finish()
     except OSError as exc:
         raise _spool_failed(exc)
+    # The walker never yields an entry named like the ignore file (any
+    # letter case, any type, even if a symlink or hidden by --ignore). Only
+    # the top-level file that was actually loaded is applied, so any other
+    # is a protection the user expects but does not have.
+    for full, rel in walk_stats.get("watched", ()):
+        if "/" not in rel and ignore_file is not None and _same_file(full, ignore_file.path):
+            continue
+        nested_ignore_files.append(rel)
     log(f"Scanned {file_count} file(s); found {n_orphans} orphan(s).")
     if kept_as_input:
         typer.echo(
@@ -708,8 +717,9 @@ def _scan_and_report(
             typer.echo(f"  line {e.line}: {e.text}", err=True)
     if nested_ignore_files:
         typer.echo(
-            f"WARNING: only the top-level {IGNORE_FILE_NAME} is read; these "
-            f"nested ones are not applied:",
+            f"WARNING: only the top-level {IGNORE_FILE_NAME} (a regular file) "
+            f"is read; these nested ones are not applied, nor is any other "
+            f"letter case, symlink or directory of that name:",
             err=True,
         )
         for rel in nested_ignore_files[:20]:

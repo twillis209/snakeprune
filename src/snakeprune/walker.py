@@ -61,6 +61,7 @@ def iter_results_files(
     exclude_dirs: Iterable[str] = (),
     stats: dict | None = None,
     track_globs: Sequence[str] = (),
+    watch_name: str | None = None,
 ) -> Iterator[tuple[str, str]]:
     """Yield ``(full_path, rel_posix)`` string pairs for regular files under
     ``results_dir``, skipping ignored paths and (by default) symlinks.
@@ -91,6 +92,14 @@ def iter_results_files(
     individually: ``stats["glob_hits"]`` is set to the set of their indices
     that matched at least one file, so the caller can flag a glob that
     protected nothing (usually a typo).
+
+    ``watch_name`` (the ignore file's name) is matched in any letter case
+    against every entry, whatever its type (file, symlink, broken symlink,
+    directory), before the symlink, ``exclude_dirs`` and ignore-glob filters
+    apply. Matching entries are never yielded or descended into; their
+    ``(full_path, rel_posix)`` pairs are collected in
+    ``stats["watched"]`` so the caller can tell a protection it does not
+    apply from one it does.
     """
     ignore_re = _compile_globs(ignore_globs)
     tracked = [(i, _compile_globs([g])) for i, g in enumerate(track_globs)]
@@ -98,6 +107,10 @@ def iter_results_files(
     if stats is not None:
         stats["glob_hits"] = glob_hits
     exclude_set = {os.path.abspath(p) for p in exclude_dirs}
+    watch_key = watch_name.casefold() if watch_name is not None else None
+    watched: list[tuple[str, str]] = []
+    if stats is not None:
+        stats["watched"] = watched
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
         stats["excluded_dirs"] = 0
@@ -115,6 +128,12 @@ def iter_results_files(
             continue
         with scandir_it:
             for entry in scandir_it:
+                if watch_key is not None and entry.name.casefold() == watch_key:
+                    rel = entry.path[base_len:]
+                    if needs_sep_swap:
+                        rel = rel.replace(sep, "/")
+                    watched.append((entry.path, rel))
+                    continue
                 try:
                     is_link = entry.is_symlink()
                 except OSError:

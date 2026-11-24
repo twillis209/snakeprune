@@ -164,3 +164,26 @@ def test_ignore_glob_with_too_many_double_stars_is_rejected():
 def test_ignore_glob_subdir_suffix_matches_the_prefix_itself():
     assert _matches_any_glob("sub", ["sub/**"]) is True
     assert _matches_any_glob("subway/x", ["sub/**"]) is False
+
+
+def test_iter_results_files_reports_watched_name_of_any_type_and_case(make_results, tmp_path):
+    results = make_results(["a.txt", "sub/b.txt", "hidden/c.txt"])
+    (results / "sub" / ".snakepruneignore").symlink_to(tmp_path / "missing")
+    (results / "dirform").mkdir()
+    (results / "dirform" / ".snakepruneignore").mkdir()
+    (results / "dirform" / ".snakepruneignore" / "x.txt").touch()
+    (results / "hidden" / ".SnakePruneIgnore").write_text("")
+    (results / ".snakepruneignore").write_text("")
+    stats: dict = {}
+    rels = sorted(
+        rel for _, rel in iter_results_files(
+            results, ignore_globs=["**/.*"], stats=stats, watch_name=".snakepruneignore",
+        )
+    )
+    assert rels == ["a.txt", "hidden/c.txt", "sub/b.txt"]
+    assert sorted(rel for _, rel in stats["watched"]) == [
+        ".snakepruneignore",
+        "dirform/.snakepruneignore",
+        "hidden/.SnakePruneIgnore",
+        "sub/.snakepruneignore",
+    ]

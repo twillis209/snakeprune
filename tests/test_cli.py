@@ -2313,3 +2313,83 @@ def test_cli_ancestor_ignore_file_seen_through_symlinked_results_dir(
     )
     assert result.exit_code == 3, result.output
     assert (storage / "junk.csv").exists()
+
+
+def _nested_ignore_refuses(make_pipeline, make_results, setup, extra_args=()):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/precious.dat", "junk.csv"])
+    setup(results)
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--delete", "--yes", *extra_args]
+    )
+    assert result.exit_code == 3, result.output
+    assert (results / "sub" / "precious.dat").exists()
+    assert (results / "junk.csv").exists()
+    return result
+
+
+def test_cli_nested_ignore_file_symlink_refuses(make_pipeline, make_results, tmp_path):
+    def setup(results):
+        real = tmp_path / "elsewhere.ignore"
+        real.write_text("precious.dat\n")
+        (results / "sub" / ".snakepruneignore").symlink_to(real)
+
+    _nested_ignore_refuses(make_pipeline, make_results, setup)
+
+
+def test_cli_nested_ignore_file_broken_symlink_refuses(make_pipeline, make_results, tmp_path):
+    def setup(results):
+        (results / "sub" / ".snakepruneignore").symlink_to(tmp_path / "missing")
+
+    _nested_ignore_refuses(make_pipeline, make_results, setup)
+
+
+def test_cli_nested_ignore_file_hidden_by_ignore_glob_refuses(make_pipeline, make_results):
+    def setup(results):
+        (results / "sub" / ".snakepruneignore").write_text("precious.dat\n")
+
+    _nested_ignore_refuses(make_pipeline, make_results, setup, ["--ignore", "**/.*"])
+
+
+def test_cli_nested_ignore_directory_name_refuses(make_pipeline, make_results):
+    def setup(results):
+        (results / "sub" / ".snakepruneignore").mkdir()
+
+    _nested_ignore_refuses(make_pipeline, make_results, setup)
+
+
+def test_cli_nested_ignore_file_case_variant_refuses(make_pipeline, make_results):
+    def setup(results):
+        (results / "sub" / ".SnakePruneIgnore").write_text("precious.dat\n")
+
+    result = _nested_ignore_refuses(make_pipeline, make_results, setup)
+    assert "sub/.SnakePruneIgnore" in result.stderr
+
+
+def test_cli_top_level_ignore_file_case_variant_is_honoured_not_listed(
+    make_pipeline, make_results
+):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["keep.csv", "junk.csv"])
+    (results / ".SnakepruneIgnore").write_text("keep.csv\n")
+    if not (results / ".snakepruneignore").exists():
+        pytest.skip("case-sensitive filesystem: the variant is not loaded")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+    assert (results / ".SnakepruneIgnore").exists()
+    assert (results / "keep.csv").exists()
+
+
+def test_cli_second_top_level_ignore_file_variant_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["keep.csv", "junk.csv"])
+    (results / ".snakepruneignore").write_text("keep.csv\n")
+    try:
+        with open(results / ".SNAKEPRUNEIGNORE", "x") as f:
+            f.write("junk.csv\n")
+    except FileExistsError:
+        pytest.skip("case-insensitive filesystem: only one spelling can exist")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3, result.output
+    assert (results / "junk.csv").exists()
