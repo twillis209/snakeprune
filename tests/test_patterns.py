@@ -1084,9 +1084,33 @@ def test_absolute_output_outside_results_dir_is_still_dropped_with_warning():
     assert pats == [] and len(warnings) == 2
 
 
-def test_absolute_output_differing_only_in_case_is_mapped_under_results_dir():
-    pats, _ = _build(outputs=["/DATA/P1/Results/{s}.txt"])
+def _case_variant_setup(tmp_path):
+    results = tmp_path / "proj" / "results"
+    results.mkdir(parents=True)
+    variant = str(tmp_path / "PROJ" / "Results")
+    spec = RuleSpec(name="r", outputs=[variant + "/{s}.txt"], constraints={})
+    return results, spec
+
+
+def test_absolute_output_in_another_case_is_mapped_when_the_filesystem_agrees(tmp_path):
+    results, spec = _case_variant_setup(tmp_path)
+    if not os.path.exists(tmp_path / "PROJ" / "Results"):
+        pytest.skip("case-sensitive filesystem")
+    pats = _brp([spec], Path("/wd"), results_dir=results, match_prefix="results/")
     assert [rx.pattern for _, rx in pats] == [r"^results/(?P<s>[^/]+)\.txt$"]
+
+
+def test_absolute_output_in_another_case_is_not_mapped_when_spellings_differ(
+    tmp_path, monkeypatch
+):
+    # On a case-sensitive filesystem `/x/PROJ/Results` is another directory;
+    # mapping it would make the "no rule writes here" guard pass wrongly.
+    results, spec = _case_variant_setup(tmp_path)
+    monkeypatch.setattr("snakeprune.patterns.os.path.samefile", lambda a, b: False)
+    warnings: list[str] = []
+    pats = _brp([spec], Path("/wd"), on_warning=warnings.append,
+                results_dir=results, match_prefix="results/")
+    assert pats == [] and len(warnings) == 1
 
 
 def test_absolute_input_with_wildcard_above_results_dir_is_refused():

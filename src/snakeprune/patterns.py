@@ -407,15 +407,24 @@ def _rewrite_under_results_dir(
     literal_dir = literal[: literal.rfind("/")]
     resolved = os.path.realpath(literal_dir or "/").rstrip("/") + path[len(literal_dir) :]
     # Compared in NFC: the rule text and the on-disk spelling may differ in form.
-    # Also compared ignoring letter case: on a case-insensitive filesystem
-    # `/Data/Results/x` is a file under `/data/results`, and on a
-    # case-sensitive one treating it as such only protects more files.
+    # A spelling that differs only in letter case counts only where the
+    # filesystem agrees it is the same directory (case-insensitive ones,
+    # such as macOS's default): elsewhere `/data/Results` is a different
+    # directory, and mapping it would let the "no rule writes here" guard
+    # pass on a path no rule writes to.
     bases = (nfc(os.path.abspath(results_dir)), nfc(os.path.realpath(results_dir)))
     for candidate in dict.fromkeys((nfc(path), nfc(resolved))):
         for base in bases:
             head = candidate[: len(base) + 1]
-            if head == base + "/" or head.casefold() == (base + "/").casefold():
+            if head == base + "/":
                 return match_prefix + candidate[len(base) + 1 :]
+            if head.casefold() == (base + "/").casefold():
+                try:
+                    same = os.path.samefile(head[:-1], base)
+                except OSError:
+                    same = False
+                if same:
+                    return match_prefix + candidate[len(base) + 1 :]
     return None
 
 
