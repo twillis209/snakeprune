@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **331 tests**, split across six files:
+As of this writing the suite is **340 tests**, split across six files:
 
-- `tests/test_patterns.py` (106) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (109) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (154) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (160) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore
@@ -259,7 +259,13 @@ genuinely mean it.
 7. **Symlink and directory refusals at the point of deletion.** The deletion
    primitive itself refuses to remove a directory, and refuses to remove a
    symlink unless `--allow-symlinks` is set (and when it does remove a symlink,
-   it removes the link, never the target — tested explicitly).
+   it removes the link, never the target — tested explicitly). With
+   `--follow-symlinks` and no `--allow-symlinks`, a dry run refuses a symlink
+   orphan just as `--delete` would, and in delete mode every check the
+   deletion makes runs before anything is listed
+   (`test_cli_dry_run_refuses_symlink_orphan_that_delete_would_refuse`,
+   `test_cli_scan_symlink_orphan_delete_refuses_cleanly`,
+   `test_cli_scan_trash_collision_refuses`, both asserting an empty stdout).
 
 8. **All-or-nothing batch validation (the most recent hardening).** This is the
    one that closed a genuine data-loss bug. Deletion now validates *every*
@@ -272,12 +278,12 @@ genuinely mean it.
    clean `Refusing to delete: …` message and exit code 3, instead of an
    uncaught error and a stack trace.
 
-9. **`--limit` cannot be combined with deletion.** `--limit` is a benchmarking
-   aid that truncates the scan after N files, which makes the orphan set partial
-   and the orphan-rate guard meaningless. Passing it together with `--delete` or
-   `--trash` is refused outright (exit 3) before anything is scanned, so it can
-   never delete an arbitrary subset of a half-finished scan. On its own, for a
-   dry run, it stays legal. All three cases are tested.
+9. **`--limit` caps the listing, never the walk.** `--limit N` lists at most N
+   orphans, but the whole tree is still walked, so every end-of-walk refusal
+   sees all of it (`test_cli_limit_still_walks_everything_so_every_refusal_applies`,
+   `test_cli_limit_caps_the_listing`). Passing it together with `--delete` or
+   `--trash` is refused outright (exit 3), since that would delete files you
+   were never shown. On its own, for a dry run, it stays legal.
 
 10. **`--trash` as a reversible alternative, and it won't clobber itself.**
    Instead of unlinking, you can move orphans into a trash directory; the
@@ -387,13 +393,22 @@ before its fix:
   `test_extract_workflow_reports_the_directory_snakemake_ends_up_in`,
   `test_extract_workflow_follows_a_chdir_made_while_parsing`,
   `test_extract_workflow_relative_pipeline_dir_and_configfile`). An absolute
-  output that may name files in the results tree but cannot be matched is
-  refused instead of dropped, while one plainly elsewhere is still dropped
-  with a warning, and one in another letter case is mapped
-  (`test_absolute_output_with_wildcard_above_results_dir_is_refused`,
+  rule path (output or input) outside the results dir with a wildcard in a
+  directory part refuses (exit 4) unless `--allow-wildcard-absolute-paths`,
+  since a wildcard value or symlink could lead it into the tree; a literal
+  one or one with a wildcard only in its final component is still dropped
+  (outputs, with a warning) or skipped (inputs); one in another letter case
+  is mapped only where the filesystem says the spellings are the same
+  directory (`test_absolute_output_with_wildcard_above_results_dir_is_refused`,
   `test_absolute_directory_output_containing_results_dir_is_refused`,
   `test_absolute_output_outside_results_dir_is_still_dropped_with_warning`,
-  `test_absolute_output_differing_only_in_case_is_mapped_under_results_dir`).
+  `test_absolute_output_with_wildcard_only_in_final_component_is_dropped`,
+  `test_absolute_input_with_wildcard_directory_elsewhere_is_refused`,
+  `test_allow_wildcard_absolute_paths_skips_with_a_warning`,
+  `test_cli_absolute_output_with_wildcard_dir_through_symlink_refuses`,
+  `test_cli_absolute_input_with_wildcard_dir_has_an_override`,
+  `test_absolute_output_in_another_case_is_mapped_when_the_filesystem_agrees`,
+  `test_absolute_output_in_another_case_is_not_mapped_when_spellings_differ`).
 - **Nested ignore files cannot hide.** The walker reports every entry named
   like the ignore file, in any letter case and of any type, before its
   symlink, exclude and glob filters; the CLI refuses for each one other than
@@ -409,21 +424,19 @@ before its fix:
   skip on case-sensitive and case-insensitive filesystems respectively —
   and `test_cli_top_level_ignore_variant_that_was_not_loaded_refuses`, which
   runs anywhere).
-- **Wildcard constraints are a union over the outputs.** Every output, log,
+- **Wildcard constraints are a union over the products.** Every output, log,
   benchmark and input of a rule accepts, for each wildcard, the union of its
-  constraints over the rule's outputs, as Snakemake formats every path with
-  the job's values (`test_input_wildcard_accepts_union_of_output_constraints`,
+  constraints over the rule's outputs, logs and benchmarks: Snakemake picks a
+  job by matching a requested file against any of them (`Rule.products`) and
+  formats every path with the job's values (`test_input_wildcard_accepts_union_of_output_constraints`,
   `test_every_output_accepts_union_of_output_constraints`,
   `test_output_union_of_two_constraints_is_alternation`,
   `test_output_union_keeps_constraint_that_spans_slash_in_strict_build`,
   `test_single_constraint_regex_is_unchanged`,
   `test_cli_inputs_and_outputs_take_union_of_output_constraints`,
-  `test_cli_explainer_names_wildcard_left_free_by_one_output`). Logs and
-  benchmarks are never matched to pick a job, so they do not widen the union,
-  but still accept their own constraints
-  (`test_log_paths_do_not_widen_the_union_but_keep_their_own_constraint`,
-  `test_run_extractor_marks_log_and_benchmark_paths`,
-  `test_cli_log_without_inline_constraint_does_not_widen_outputs`).
+  `test_cli_explainer_names_wildcard_left_free_by_one_output`,
+  `test_log_paths_widen_the_union_since_they_decide_job_wildcards`,
+  `test_cli_log_request_decides_wildcards_so_union_includes_logs`).
 - **A dry run refuses wherever `--delete` would refuse over live files**,
   with exit 3 and an empty stdout; `--summary` still prints its table on
   stderr (`test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout`,
@@ -432,9 +445,14 @@ before its fix:
   `test_cli_dry_run_refuses_nested_ignore_file`,
   `test_cli_dry_run_refuses_unmatched_ignore_glob`,
   `test_cli_dry_run_refuses_ancestor_ignore_file`,
+  `test_cli_dry_run_refuses_nested_ignore_file_hidden_by_ignore_glob`,
+  `test_cli_dry_run_refuses_symlink_orphan_that_delete_would_refuse`,
   `test_cli_dry_run_refuses_naughty_dir_unless_allowed`,
   `test_cli_dry_run_refuses_scanning_the_workdir`,
-  `test_cli_dry_run_refuses_filesystem_root`).
+  `test_cli_dry_run_refuses_filesystem_root`). Each of the ancestor-ignore,
+  naughty-dir, filesystem-root and ignore-before-`--ignore` tests was checked
+  to fail when its own gate is removed, so no other guard supplies its exit
+  code.
 - **Case-variant ignore file names** are recognised everywhere (see the
   nested-ignore tests above, and `test_ancestor_ignore_file_case_variant_is_found`).
 - **Input-only files do not dilute the orphan rate**
@@ -495,11 +513,11 @@ Trust comes from knowing the edges, so here are the gaps that remain:
   paths in another letter case have dedicated tests; the rest is by
   inspection rather than by proof. Some ignore-file case tests can only run
   on one kind of filesystem and skip on the other.
-- **Absolute rule paths with a wildcard above the results directory** are
-  refused from their literal text alone, so a workflow writing to
-  `/home/{user}/...` is refused when the results directory is under
-  `/home`, even though a strict wildcard could not actually reach it. This
-  errs towards refusing and is tested only in that direction.
+- **Absolute rule paths with a wildcard in a directory part** are refused
+  by default wherever they point, because snakeprune cannot rule out a
+  wildcard value or symlink leading into the results tree;
+  `--allow-wildcard-absolute-paths` drops them with a warning and hands that
+  judgement to the user.
 
 None of these are believed to cause silent data loss today, but they are the
 honest next targets if you want the suite to be airtight.

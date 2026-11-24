@@ -51,6 +51,9 @@ snakeprune scan path/to/pipeline path/to/results --ignore "notes/**" --ignore "*
 # Skip an entire existing subtree from the walk (faster than --ignore for big dirs)
 snakeprune scan path/to/pipeline path/to/results --exclude-dir old_results_to_keep
 
+# Show only the first 20 orphans (the whole tree is still walked and checked)
+snakeprune scan path/to/pipeline path/to/results --limit 20
+
 # Let unconstrained wildcards span '/' (Snakemake's own default); fewer orphans
 snakeprune scan path/to/pipeline path/to/results --permissive-wildcards
 
@@ -120,7 +123,7 @@ The guards below catch a wrong target or a broken workflow load. They cannot cat
 
 ### Built-in refusals
 
-Every refusal that would stop `--delete` / `--trash` because a listed file might be live or protected stops a dry run too: exit 3, nothing on stdout, the reason on stderr. So a dry run's stdout is always exactly what `--delete` would remove, never a list `--delete` would refuse. Where a refusal has an override flag, the flag works in a dry run as well. Refusals about the mechanics of deleting (`--limit`, `--summary`, trash placement, the confirmation prompt, symlinks without `--allow-symlinks`) apply only to `--delete` / `--trash`. With `--summary`, the table is still printed on stderr before the refusal.
+Every refusal that would stop `--delete` / `--trash` because a listed file might be live or protected stops a dry run too: exit 3, nothing on stdout, the reason on stderr. So a dry run's stdout is always exactly what `--delete` would remove, never a list `--delete` would refuse. Where a refusal has an override flag, the flag works in a dry run as well. A symlink orphan (listed only with `--follow-symlinks`) is refused in a dry run too unless `--allow-symlinks` is passed, since `--delete` would refuse it. Refusals about the mechanics of deleting (`--limit` or `--summary` combined with deletion, trash placement, the confirmation prompt) apply only to `--delete` / `--trash`; under `--delete` / `--trash` every check the deletion would make runs before anything is listed. With `--summary`, the table is still printed on stderr before the refusal.
 
 - **Empty rule list.** If the workflow loads but produces zero path patterns (e.g. all rules are gated behind config that wasn't passed), `snakeprune` refuses to scan rather than report every file as an orphan. Override with `--allow-empty-rules`.
 - **Results-dir / rule-prefix mismatch.** If no rule writes under the results directory's path relative to the workflow's working directory, nor under its basename (see below), every file would look like an orphan. `snakeprune` refuses and surfaces the prefixes the rules actually use. Override with `--allow-basename-mismatch`.
