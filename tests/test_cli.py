@@ -2292,3 +2292,24 @@ def test_cli_scan_spool_read_failure_mid_trash_reports_count_and_verb(
     assert result.exit_code == 5, result.output
     assert "Moved 1 of 2" in result.stderr
     assert "Nothing was deleted" not in result.stderr
+
+
+def test_cli_ancestor_ignore_file_seen_through_symlinked_results_dir(
+    make_pipeline, tmp_path
+):
+    # project/results is a symlink to storage elsewhere; project's ignore
+    # file is a lexical ancestor only, and must still stop the delete.
+    pipeline = make_pipeline(_ONE_RULE)
+    storage = tmp_path / "storage" / "results"
+    storage.mkdir(parents=True)
+    for f in _LIVE + ["junk.csv"]:
+        (storage / f).touch()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".snakepruneignore").write_text("results/junk.csv\n")
+    (project / "results").symlink_to(storage)
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(project / "results"), "--delete", "--yes"]
+    )
+    assert result.exit_code == 3, result.output
+    assert (storage / "junk.csv").exists()

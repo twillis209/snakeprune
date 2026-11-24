@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from snakeprune.ignorefile import IgnoreFileError, load_ignore_file
@@ -63,3 +65,41 @@ def test_existing_directory_entry_is_literal_even_with_glob_chars(tmp_path):
 def test_too_many_double_stars_names_the_line(tmp_path):
     with pytest.raises(IgnoreFileError, match="line 2"):
         load_ignore_file(_write(tmp_path, "ok\na/**/b/**/c/**/d/**/x\n"))
+
+
+def test_ancestor_ignore_file_found_through_symlinked_directory(tmp_path):
+    # Scanning project/results where `results` is a symlink to storage
+    # elsewhere: project/.snakepruneignore is an ancestor lexically, though
+    # not of the resolved path, and must still be found.
+    from snakeprune.ignorefile import find_ancestor_ignore_files
+
+    storage = tmp_path / "storage" / "results"
+    storage.mkdir(parents=True)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".snakepruneignore").write_text("keep/\n")
+    (project / "results").symlink_to(storage)
+    found = find_ancestor_ignore_files(project / "results")
+    assert project / ".snakepruneignore" in found
+
+
+def test_ancestor_ignore_file_found_by_resolved_path(tmp_path):
+    from snakeprune.ignorefile import find_ancestor_ignore_files
+
+    real = tmp_path / "real"
+    (real / "results").mkdir(parents=True)
+    (real / ".snakepruneignore").write_text("")
+    link = tmp_path / "link"
+    link.mkdir()
+    (link / "results").symlink_to(real / "results")
+    found = find_ancestor_ignore_files(link / "results")
+    assert any(os.path.samefile(p, real / ".snakepruneignore") for p in found)
+
+
+def test_ancestor_ignore_file_case_variant_is_found(tmp_path):
+    from snakeprune.ignorefile import find_ancestor_ignore_files
+
+    (tmp_path / "results").mkdir()
+    (tmp_path / ".SnakepruneIgnore").write_text("")
+    found = find_ancestor_ignore_files(tmp_path / "results")
+    assert [p.name for p in found if p.parent == tmp_path] == [".SnakepruneIgnore"]

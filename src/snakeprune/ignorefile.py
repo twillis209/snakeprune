@@ -107,16 +107,43 @@ def load_ignore_file(results_dir: Path) -> IgnoreFile | None:
     return result
 
 
+def is_ignore_file_name(name: str) -> bool:
+    """Whether ``name`` is the ignore file's name in any letter case.
+
+    A case-insensitive filesystem (macOS by default) opens
+    ``.SnakepruneIgnore`` as ``.snakepruneignore``, so every spelling counts.
+    """
+    return name.casefold() == IGNORE_FILE_NAME.casefold()
+
+
+def _ignore_files_in(directory: Path) -> list[Path]:
+    """Entries of ``directory`` named like the ignore file, any letter case."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        # Unlistable: fall back to the exact name (which a case-insensitive
+        # filesystem resolves for any spelling).
+        candidate = directory / IGNORE_FILE_NAME
+        return [candidate] if os.path.lexists(candidate) else []
+    return [directory / n for n in sorted(names) if is_ignore_file_name(n)]
+
+
 def find_ancestor_ignore_files(results_dir: Path) -> list[Path]:
-    """``.snakepruneignore`` files in directories above ``results_dir``.
+    """Ignore files (any letter case) in directories above ``results_dir``.
 
     Scanning a subdirectory of a protected tree would bypass the parent's
-    file, so the caller refuses deletion when any are found.
+    file, so the caller refuses when any are found. Both the lexical
+    ancestors (``results_dir`` may be reached through a symlinked directory)
+    and the ancestors of its resolved path are checked.
     """
-    found = []
-    here = Path(os.path.realpath(results_dir))
-    for ancestor in here.parents:
-        candidate = ancestor / IGNORE_FILE_NAME
-        if os.path.lexists(candidate):
-            found.append(candidate)
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for here in (Path(os.path.abspath(results_dir)), Path(os.path.realpath(results_dir))):
+        for ancestor in here.parents:
+            if ancestor in seen:
+                continue
+            seen.add(ancestor)
+            for candidate in _ignore_files_in(ancestor):
+                if candidate not in found:
+                    found.append(candidate)
     return found
