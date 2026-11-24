@@ -12,6 +12,8 @@ on stdout:
      "rules": [{"name": str,
                 "outputs": list[str],       # raw path strings, inline {name,regex} kept
                 "directories": list[str],   # subset of outputs flagged directory()
+                "inputs": list[str],        # static input paths (functions skipped)
+                "dynamic_inputs": int,      # input entries that are functions
                 "constraints": dict[str, str]}, ...]}
 
 The working directory is, in order of precedence: `--directory` (as with
@@ -144,6 +146,13 @@ def _load_workflow(
                 for o in rule.output
                 if is_flagged(o, "directory")
             ]
+            inputs: list[str] = []
+            dynamic_inputs = 0
+            for i in rule.input:
+                if callable(i) or is_callable(i):
+                    dynamic_inputs += 1
+                else:
+                    inputs.append(_relativise(str(i), workdir))
             rule_constraints = dict(
                 getattr(rule, "wildcard_constraints", {}) or {}
             )
@@ -152,6 +161,8 @@ def _load_workflow(
                     "name": rule.name,
                     "outputs": raw_outputs,
                     "directories": directories,
+                    "inputs": list(dict.fromkeys(inputs)),
+                    "dynamic_inputs": dynamic_inputs,
                     "constraints": {**global_constraints, **rule_constraints},
                 }
             )

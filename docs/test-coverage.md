@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **266 tests**, split across six files:
+As of this writing the suite is **270 tests**, split across six files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (20) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (121) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (125) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (8 functions, 11 cases) — is `.snakepruneignore`
   parsed exactly, and are entries it cannot interpret refused?
@@ -338,6 +338,15 @@ genuinely mean it.
    existing directory is protected literally even if its name has glob
    characters or the entry lacks a trailing `/`
    (`test_cli_ignore_file_protects_glob_named_and_slashless_directories`).
+
+17. **A file a rule reads is never deleted, even if no rule makes it.** A
+   frozen input survives `--delete` while a look-alike that breaks the output's
+   wildcard constraint is still listed
+   (`test_cli_rule_inputs_are_live_even_if_nothing_produces_them`); an input
+   directory protects its contents
+   (`test_cli_rule_input_directory_protects_its_contents`); input functions,
+   which cannot be resolved, are reported
+   (`test_cli_input_functions_are_reported_as_unprotected`).
 
 ## The headline data-loss invariants
 

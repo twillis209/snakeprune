@@ -180,11 +180,18 @@ class RuleSpec:
         constraints: fallback wildcard constraints (rule-local merged over
             workflow-global) for wildcards with no inline annotation.
         directories: the subset of ``outputs`` declared with ``directory()``.
+        inputs: static input path strings. A file a rule reads is live even
+            if no rule produces it (a frozen source, say): deleting it would
+            break the workflow.
+        dynamic_inputs: how many input entries are functions, whose paths
+            cannot be known without running the DAG; they protect nothing.
     """
     name: str
     outputs: list[str]
     constraints: dict[str, str]
     directories: list[str] = field(default_factory=list)
+    inputs: list[str] = field(default_factory=list)
+    dynamic_inputs: int = 0
 
 
 class ExtractorError(RuntimeError):
@@ -316,6 +323,8 @@ def extract_workflow(
             outputs=list(r["outputs"]),
             constraints=dict(r["constraints"]),
             directories=list(r.get("directories", [])),
+            inputs=list(r.get("inputs", [])),
+            dynamic_inputs=int(r.get("dynamic_inputs", 0)),
         )
         for r in payload["rules"]
     ]
@@ -449,6 +458,9 @@ def build_rule_patterns(
     """
     out: list[tuple[str, re.Pattern]] = []
     for spec in specs:
+        out.extend(
+            _input_patterns(spec, workdir, default_wildcard_regex, results_dir, match_prefix)
+        )
         for output_str in spec.outputs:
             is_directory = output_str in spec.directories
             raw_path = output_str
@@ -492,6 +504,61 @@ def build_rule_patterns(
                     f"`{spec.name}` path `{output_str}`: {exc}"
                 ) from exc
             out.append((spec.name, compiled))
+    return out
+
+
+def _output_wildcard_constraints(spec: RuleSpec) -> dict[str, str]:
+    """Wildcard regexes as the rule's outputs constrain them.
+
+    Input paths carry no inline annotations, but their wildcards take the
+    values matched from the outputs, so they obey the same constraints.
+    """
+    found: dict[str, str] = {}
+    for output_str in spec.outputs:
+        for m in _WILDCARD_RE.finditer(output_str):
+            if m.group("constraint") and m.group("name") not in found:
+                found[m.group("name")] = m.group("constraint")
+    return {**spec.constraints, **found}
+
+
+def _input_patterns(
+    spec: RuleSpec,
+    workdir: Path,
+    default_wildcard_regex: str,
+    results_dir: Path | None,
+    match_prefix: str | None,
+) -> list[tuple[str, re.Pattern]]:
+    """Patterns for the paths a rule reads, which are live whether or not a
+    rule produces them.
+
+    Each also covers everything beneath it, in case the input is a directory.
+    An input that cannot be turned into a pattern (absolute outside the
+    results directory, `..` after a wildcard, unparseable braces) is skipped
+    without comment: inputs routinely live outside the results tree, and
+    skipping only narrows protection the user did not have before.
+    """
+    constraints = _output_wildcard_constraints(spec)
+    out: list[tuple[str, re.Pattern]] = []
+    for raw in spec.inputs:
+        path, dotdot = normalise_rule_path(unicodedata.normalize("NFC", raw))
+        if dotdot and path.startswith("../"):
+            path, dotdot = normalise_rule_path(str(workdir) + "/" + path)
+        if dotdot or not path:
+            continue
+        if path.startswith("/"):
+            rewritten = _rewrite_under_results_dir(path, results_dir, match_prefix)
+            if rewritten is None:
+                continue
+            path = rewritten
+        try:
+            out.append((
+                spec.name,
+                re.compile(wildcard_pattern_to_regex(
+                    path, constraints, default=default_wildcard_regex, is_directory=True,
+                )),
+            ))
+        except (PatternError, re.error):
+            continue
     return out
 
 

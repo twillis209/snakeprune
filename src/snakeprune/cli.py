@@ -443,7 +443,17 @@ def scan(
     except (ExtractorError, PatternError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=4)
-    log(f"Loaded {len(patterns)} rule path pattern(s) (output, log, benchmark).")
+    log(f"Loaded {len(patterns)} rule path pattern(s) (output, log, benchmark, input).")
+    dynamic = [(r.name, r.dynamic_inputs) for r in extracted.rules if r.dynamic_inputs]
+    if dynamic:
+        total_dynamic = sum(n for _, n in dynamic)
+        typer.echo(
+            f"Note: {total_dynamic} input(s) in {len(dynamic)} rule(s) are "
+            f"functions, so their paths are unknown until the DAG is built; "
+            f"a file that only such an input reads, and no rule produces, is "
+            f"not protected. List any such file in {IGNORE_FILE_NAME}.",
+            err=True,
+        )
     if not patterns and not allow_empty_rules:
         typer.echo(
             "Workflow loaded but produced 0 path patterns. Refusing to "

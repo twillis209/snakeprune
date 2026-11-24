@@ -2126,3 +2126,68 @@ def test_cli_ignore_file_protects_glob_named_and_slashless_directories(make_pipe
     assert (results / "run[1]/a.csv").exists()
     assert (results / "ad_hoc/c.csv").exists()
     assert not (results / "run1/b.csv").exists()
+
+
+_FROZEN_INPUT = (
+    "rule extract:\n"
+    "    input: 'results/frozen/{chr}.vcf.gz', expand('results/frozen/{c}.csi', c=['chr1'])\n"
+    "    output: 'results/out/{chr,chr[0-9]+}.txt'\n"
+    "    shell: 'touch {output}'\n"
+)
+
+
+def test_cli_rule_inputs_are_live_even_if_nothing_produces_them(make_pipeline, make_results):
+    # A frozen source read by a rule must survive --delete; a file that only
+    # looks similar but breaks the output's constraint is still an orphan.
+    pipeline = make_pipeline(_FROZEN_INPUT)
+    results = make_results(
+        ["out/chr1.txt", "frozen/chr1.vcf.gz", "frozen/chr2.vcf.gz", "frozen/chr1.csi",
+         "frozen/junk.vcf.gz"]
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes",
+                                 "--allow-high-orphan-rate"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "frozen/junk.vcf.gz")]
+    for kept in ("frozen/chr1.vcf.gz", "frozen/chr2.vcf.gz", "frozen/chr1.csi", "out/chr1.txt"):
+        assert (results / kept).exists(), kept
+    assert "input)" in result.stderr
+
+
+def test_cli_rule_input_directory_protects_its_contents(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: 'results/reference'\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(_LIVE + ["reference/a/b.fa", "reference.bak/c.fa"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "reference.bak/c.fa")]
+
+
+def test_cli_input_functions_are_reported_as_unprotected(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: lambda w: 'results/src/' + w.n + '.in'\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(_LIVE + ["src/1.in"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--quiet"])
+    assert result.exit_code == 0, result.output
+    assert "1 input(s) in 1 rule(s) are functions" in result.stderr
+    assert result.stdout.split() == [str(results / "src/1.in")]
+
+
+def test_cli_input_outside_results_is_dropped_silently(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: '/nonexistent/elsewhere/ref.fa', '../outside.txt'\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(_LIVE)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "dropping" not in result.stderr
