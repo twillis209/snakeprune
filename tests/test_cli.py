@@ -362,7 +362,9 @@ def test_cli_follow_symlinks_reports_skipped_symlinked_dirs(make_pipeline, make_
     target = tmp_path / "target.txt"
     target.write_text("t")
     (results / "link_file").symlink_to(target)
-    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--follow-symlinks"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--follow-symlinks", "--allow-symlinks"]
+    )
     assert result.exit_code == 0
     combined = result.stdout + (result.stderr or "")
     assert "Skipped 1 symlinked subdirectory" in combined
@@ -688,6 +690,7 @@ def test_cli_scan_symlink_orphan_delete_refuses_cleanly(
         ],
     )
     assert result.exit_code == 3
+    assert result.stdout == ""  # refused before anything was listed
     combined = result.stdout + (result.stderr or "")
     assert "--allow-symlinks" in combined
     # Nothing deleted: the symlink and the live file both remain.
@@ -780,6 +783,7 @@ def test_cli_scan_trash_collision_refuses(make_pipeline, make_results, tmp_path)
         ],
     )
     assert result.exit_code == 3
+    assert result.stdout == ""  # refused before anything was listed
     combined = result.stdout + (result.stderr or "")
     assert "already exists" in combined
     # Source orphan untouched; prior trashed copy intact.
@@ -2693,3 +2697,22 @@ def test_cli_absolute_input_with_wildcard_dir_has_an_override(make_pipeline, mak
     assert allowed.exit_code == 0, allowed.output
     assert allowed.stdout.split() == [str(results / "junk.csv")]
     assert "/nowhere/{s}/raw/x.fq" in allowed.stderr
+
+
+def test_cli_dry_run_refuses_symlink_orphan_that_delete_would_refuse(
+    make_pipeline, make_results, tmp_path
+):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE)
+    target = tmp_path / "outside.txt"
+    target.write_text("x")
+    (results / "stale_link.csv").symlink_to(target)
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results), "--follow-symlinks"])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "--allow-symlinks" in dry.stderr
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--follow-symlinks", "--allow-symlinks"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert allowed.stdout.split() == [str(results / "stale_link.csv")]

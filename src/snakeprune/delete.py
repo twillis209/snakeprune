@@ -44,37 +44,20 @@ class DeletionFailed(RuntimeError):
         )
 
 
-def delete_orphans(
-    orphans: Iterable[OrphanFile],  # iterated twice if re-iterable
+def validate_orphans(
+    orphans: Iterable[OrphanFile],  # must be re-iterable
     allow_symlinks: bool = False,
     trash_dir: Path | None = None,
     results_dir_name: str | None = None,
-) -> None:
-    """Remove each orphan: either ``path.unlink()`` (default) or
-    ``shutil.move`` into ``trash_dir / results_dir_name / orphan.rel`` when
-    ``trash_dir`` is provided. Refuses to operate on directories. Refuses
-    symlinks unless ``allow_symlinks=True``. Prints what's being removed to
-    stderr.
+) -> int:
+    """Every check `delete_orphans` makes before removing anything; returns
+    the number of orphans. Raises ``IsADirectoryError`` / ``PermissionError``
+    / ``FileExistsError`` for an entry that would be refused, or ``OSError``
+    if the list cannot be read back. Removes nothing.
 
-    ``results_dir_name`` is required when ``trash_dir`` is provided so that a
-    single trash dir can be reused across multiple results dirs without
-    collisions.
-
-    Validation is all-or-nothing: every orphan is checked against the directory,
-    symlink, and (in trash mode) collision guards *before* anything is moved or
-    removed, so a single disallowed entry aborts the whole batch without having
-    destroyed the entries listed before it. If an ``OSError`` occurs during
-    execution, ``DeletionFailed`` is raised with the count of entries already
-    removed. An ``OSError`` raised before that (including a failure to read
-    ``orphans`` back during validation) means nothing was removed.
+    The CLI runs this before listing anything, so a batch that would be
+    refused is never printed.
     """
-    if trash_dir is not None and results_dir_name is None:
-        raise ValueError("results_dir_name is required when trash_dir is set")
-    if iter(orphans) is orphans:
-        # A one-shot iterator cannot be walked twice (validate, then act).
-        # Re-iterable inputs such as a spooled selection are left as they are,
-        # so a huge batch is never held in memory at once.
-        orphans = list(orphans)
     if (
         trash_dir is not None
         and any(True for _ in orphans)
@@ -118,6 +101,46 @@ def delete_orphans(
                         f"directory, or choose another."
                     )
                 checked_ancestors.add(ancestor)
+    return total
+
+
+def delete_orphans(
+    orphans: Iterable[OrphanFile],  # iterated twice if re-iterable
+    allow_symlinks: bool = False,
+    trash_dir: Path | None = None,
+    results_dir_name: str | None = None,
+) -> None:
+    """Remove each orphan: either ``path.unlink()`` (default) or
+    ``shutil.move`` into ``trash_dir / results_dir_name / orphan.rel`` when
+    ``trash_dir`` is provided. Refuses to operate on directories. Refuses
+    symlinks unless ``allow_symlinks=True``. Prints what's being removed to
+    stderr.
+
+    ``results_dir_name`` is required when ``trash_dir`` is provided so that a
+    single trash dir can be reused across multiple results dirs without
+    collisions.
+
+    Validation is all-or-nothing: every orphan is checked against the directory,
+    symlink, and (in trash mode) collision guards *before* anything is moved or
+    removed, so a single disallowed entry aborts the whole batch without having
+    destroyed the entries listed before it. If an ``OSError`` occurs during
+    execution, ``DeletionFailed`` is raised with the count of entries already
+    removed. An ``OSError`` raised before that (including a failure to read
+    ``orphans`` back during validation) means nothing was removed.
+    """
+    if trash_dir is not None and results_dir_name is None:
+        raise ValueError("results_dir_name is required when trash_dir is set")
+    if iter(orphans) is orphans:
+        # A one-shot iterator cannot be walked twice (validate, then act).
+        # Re-iterable inputs such as a spooled selection are left as they are,
+        # so a huge batch is never held in memory at once.
+        orphans = list(orphans)
+    total = validate_orphans(
+        orphans,
+        allow_symlinks=allow_symlinks,
+        trash_dir=trash_dir,
+        results_dir_name=results_dir_name,
+    )
     # Everything above is validation: nothing has been removed yet. From
     # here on any failure, including reading the list back, is mid-batch.
     trashing = trash_dir is not None

@@ -8,7 +8,7 @@ from typing import Optional, Sequence
 
 import typer
 
-from snakeprune.delete import DeletionFailed, delete_orphans
+from snakeprune.delete import DeletionFailed, delete_orphans, validate_orphans
 from snakeprune.patterns import (
     DEFAULT_WILDCARD_REGEX,
     SNAKEMAKE_WILDCARD_REGEX,
@@ -632,6 +632,7 @@ def _scan_and_report(
     kept_as_input = 0
     n_orphans = 0
     n_ambiguous = 0
+    n_symlink_candidates = 0
 
     def _spool_failed(exc: OSError) -> typer.Exit:
         # The spool is the deletion list; never act on a partial one.
@@ -672,6 +673,13 @@ def _scan_and_report(
         )
         n_orphans += 1
         n_ambiguous += ambiguous
+        if (
+            follow_symlinks
+            and not allow_symlinks
+            and (delete_ambiguous or not ambiguous)
+            and os.path.islink(full_path)
+        ):
+            n_symlink_candidates += 1
         if ambiguous and explainer is not None:
             explainer.add(rel, targets)
         if dir_summary is not None:
@@ -798,6 +806,13 @@ def _scan_and_report(
                 f"{refusing}: orphan rate exceeded threshold. Pass "
                 f"--allow-high-orphan-rate to override."
             )
+        if n_symlink_candidates:
+            refusals.append(
+                f"{refusing}: {n_symlink_candidates} orphan(s) are symlinks, "
+                f"which --delete refuses without --allow-symlinks (it removes "
+                f"the link, never its target). Pass --allow-symlinks, or drop "
+                f"--follow-symlinks to leave symlinks out."
+            )
 
     if dir_summary is not None:
         # stderr, not stdout: stdout is reserved for paths that would be
@@ -808,6 +823,21 @@ def _scan_and_report(
         for msg in refusals:
             typer.echo(msg, err=True)
         raise typer.Exit(code=3)
+    if deleting and n_delete:
+        # Every check delete_orphans makes before removing anything, run
+        # before the list is printed, so a refused batch is never listed.
+        try:
+            validate_orphans(
+                to_delete,
+                allow_symlinks=allow_symlinks,
+                trash_dir=trash,
+                results_dir_name=results_name if trash is not None else None,
+            )
+        except (PermissionError, IsADirectoryError, FileExistsError) as exc:
+            typer.echo(f"Refusing to delete: {exc}", err=True)
+            raise typer.Exit(code=3)
+        except OSError as exc:
+            raise _spool_failed(exc)
     if dir_summary is None:
         # stdout carries exactly the files --delete would remove, so a held-back
         # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
