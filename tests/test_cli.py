@@ -2530,3 +2530,35 @@ def test_cli_dry_run_refuses_filesystem_root(make_pipeline):
     assert result.exit_code == 3, result.output
     assert result.stdout == ""
     assert "filesystem root" in result.stderr
+
+
+def test_cli_inputs_and_outputs_take_union_of_output_constraints(make_pipeline, make_results):
+    # `snakemake -n results/abc.b` plans a job (s=abc) that reads abc.in and
+    # writes abc.a, though output a constrains s to digits.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: 'results/{s}.in'\n"
+        "    output: a='results/{s,\\\\d+}.a', b='results/{s}.b'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(
+        ["abc.in", "abc.a", "abc.b", "1.in", "1.a", "1.b", "junk.csv"]
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_cli_explainer_names_wildcard_left_free_by_one_output(make_pipeline, make_results):
+    # Output a constrains {s}; output b leaves it free, so the union is
+    # unconstrained and results/x/y.b may be live.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: a='results/{s,\\\\d+}.a', b='results/{s}.b'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results([f"{i}.{e}" for i in range(4) for e in "ab"] + ["x/y.b"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert f"ambiguous: {results / 'x/y.b'}" in result.stderr
+    assert "a: 1 file(s); unconstrained: {s}\n" in result.stderr

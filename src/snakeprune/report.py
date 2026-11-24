@@ -191,8 +191,8 @@ class AmbiguityExplainer:
     them may be the one absorbing the extra directory level: in ``{a}/{b}``
     with both unconstrained, constraining only ``a`` leaves ``b`` free to
     span ``/``. A wildcard is unconstrained when its group body is the
-    default in both builds, so one explicitly constrained to ``.+`` is not
-    reported.
+    default in both builds (alone, or leading a union of output
+    constraints), so one explicitly constrained to ``.+`` is not reported.
     """
 
     MAX_SHOWN = 20
@@ -223,10 +223,15 @@ class AmbiguityExplainer:
 
     @staticmethod
     def _groups_with_body(rx: re.Pattern, body: str) -> tuple[str, ...]:
+        # The body alone, or first in a union of a rule's output constraints
+        # (`[^/]+|(?:\d+)`, see `rule_wildcard_bodies`), which is
+        # unconstrained because some output leaves the wildcard free.
         escaped = re.escape(body)
         return tuple(
             m.group(1)
-            for m in re.finditer(r"\(\?P<(\w+)>" + escaped + r"\)", rx.pattern)
+            for m in re.finditer(
+                r"\(\?P<(\w+)>" + escaped + r"(?:\)|\|\(\?:)", rx.pattern
+            )
         )
 
     def _find(self, targets: list[str]) -> tuple[int, re.Match[str]] | None:

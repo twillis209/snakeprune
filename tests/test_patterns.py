@@ -1001,3 +1001,51 @@ def test_input_matcher_scales_to_tens_of_thousands_of_inputs():
     elapsed = time.perf_counter() - start
     assert hits == 20000
     assert elapsed < 2.0, elapsed
+
+
+from pathlib import Path
+from snakeprune.patterns import build_rule_patterns as _brp
+
+
+def _out_patterns(outputs, constraints=None, default=r"[^/]+"):
+    spec = RuleSpec(name="r", outputs=list(outputs), constraints=constraints or {})
+    return [rx for _, rx in _brp([spec], Path("/wd"), default_wildcard_regex=default)]
+
+
+def test_input_wildcard_accepts_union_of_output_constraints():
+    # output a constrains {s} to digits, output b leaves it free: a job made
+    # for results/abc.b has s=abc and reads results/abc.in.
+    m = _matcher(
+        ["results/{s}.in"], outputs=[r"results/{s,\d+}.a", "results/{s}.b"]
+    )
+    assert m.match("results/abc.in")
+    assert m.match("results/1.in")
+
+
+def test_every_output_accepts_union_of_output_constraints():
+    # The same job also writes results/abc.a: outputs are formatted with the
+    # job's values; inline constraints only restrict matching.
+    a, b = _out_patterns([r"results/{s,\d+}.a", "results/{s}.b"])
+    assert a.match("results/abc.a") and a.match("results/1.a")
+    assert b.match("results/abc.b")
+    assert not a.match("results/x/y.a")  # strict default still applies
+
+
+def test_output_union_of_two_constraints_is_alternation():
+    a, b = _out_patterns([r"results/{s,\d+}.a", r"results/{s,[a-z]+}.b"])
+    for rx, ext in ((a, "a"), (b, "b")):
+        assert rx.match(f"results/12.{ext}") and rx.match(f"results/ab.{ext}")
+        assert not rx.match(f"results/AB.{ext}")
+
+
+def test_output_union_keeps_constraint_that_spans_slash_in_strict_build():
+    # {s,.+} lets a job have s=x/y, which output b is then written with.
+    a, b = _out_patterns([r"results/{s,.+}.a", "results/{s}.b"])
+    assert b.match("results/x/y.b")
+
+
+def test_single_constraint_regex_is_unchanged():
+    (a,) = _out_patterns([r"results/{s,\d+}.a"])
+    assert a.pattern == r"^results/(?P<s>\d+)\.a$"
+    (b,) = _out_patterns(["results/{s}.b"])
+    assert b.pattern == r"^results/(?P<s>[^/]+)\.b$"

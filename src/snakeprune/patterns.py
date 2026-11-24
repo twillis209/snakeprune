@@ -43,6 +43,7 @@ def wildcard_pattern_to_regex(
     constraints: dict[str, str],
     default: str = DEFAULT_WILDCARD_REGEX,
     is_directory: bool = False,
+    overrides: dict[str, str] | None = None,
 ) -> str:
     """Convert a Snakemake path pattern to an anchored regex string.
 
@@ -56,6 +57,9 @@ def wildcard_pattern_to_regex(
 
     `is_directory=True` appends `(?:/.*)?` so that files *inside* a
     `directory()` output are matched as live.
+
+    `overrides[wildcard]`, when given, is used in place of all of the above
+    (see `rule_wildcard_bodies`).
 
     Raises `PatternError` if any `{` or `}` survives in a literal segment.
     """
@@ -80,7 +84,10 @@ def wildcard_pattern_to_regex(
             parts.append(f"(?P={name})")
         else:
             inline = match.group("constraint")
-            body = inline if inline else constraints.get(name, default)
+            if overrides is not None and name in overrides:
+                body = overrides[name]
+            else:
+                body = inline if inline else constraints.get(name, default)
             parts.append(f"(?P<{name}>{body})")
             seen.add(name)
         cursor = match.end()
@@ -458,6 +465,7 @@ def build_rule_patterns(
     """
     out: list[tuple[str, re.Pattern]] = []
     for spec in specs:
+        bodies = rule_wildcard_bodies(spec, default_wildcard_regex)
         for output_str in spec.outputs:
             is_directory = output_str in spec.directories
             raw_path = output_str
@@ -492,6 +500,7 @@ def build_rule_patterns(
                 spec.constraints,
                 default=default_wildcard_regex,
                 is_directory=is_directory,
+                overrides=bodies,
             )
             try:
                 compiled = re.compile(regex_str)
@@ -504,18 +513,45 @@ def build_rule_patterns(
     return out
 
 
-def _output_wildcard_constraints(spec: RuleSpec) -> dict[str, str]:
-    """Wildcard regexes as the rule's outputs constrain them.
+def rule_wildcard_bodies(spec: RuleSpec, default: str) -> dict[str, str]:
+    """The regex body each wildcard of a rule must accept, in every path.
 
-    Input paths carry no inline annotations, but their wildcards take the
-    values matched from the outputs, so they obey the same constraints.
+    A job's wildcard values come from matching any one of the rule's
+    outputs, each under its own effective constraint (inline, then
+    rule-level / global, then `default`); every output, log, benchmark and
+    input is then formatted with those values. So each wildcard accepts the
+    union of its constraints over the outputs. One distinct constraint is
+    used as is (the regex is unchanged); several become an alternation, with
+    `default` first when an output leaves the wildcard unconstrained (which
+    `AmbiguityExplainer` relies on). A constraint with numeric
+    backreferences cannot be alternated safely, so the union is then
+    widened to Snakemake's own `.+`.
     """
-    found: dict[str, str] = {}
+    bodies: dict[str, list[str]] = {}
     for output_str in spec.outputs:
+        seen: set[str] = set()
         for m in _WILDCARD_RE.finditer(output_str):
-            if m.group("constraint") and m.group("name") not in found:
-                found[m.group("name")] = m.group("constraint")
-    return {**spec.constraints, **found}
+            name = m.group("name")
+            if name in seen:
+                continue
+            seen.add(name)
+            body = m.group("constraint") or spec.constraints.get(name) or default
+            found = bodies.setdefault(name, [])
+            if body not in found:
+                found.append(body)
+    out: dict[str, str] = {}
+    for name, found in bodies.items():
+        if len(found) == 1:
+            out[name] = found[0]
+        elif any(_NUMBERED_GROUP_RE.search(b) for b in found):
+            out[name] = SNAKEMAKE_WILDCARD_REGEX
+        else:
+            if default in found:
+                found = [default] + [b for b in found if b != default]
+                out[name] = default + "".join(f"|(?:{b})" for b in found[1:])
+            else:
+                out[name] = "|".join(f"(?:{b})" for b in found)
+    return out
 
 
 class InputMatcher:
@@ -536,14 +572,24 @@ class InputMatcher:
         self._generic_combined: CombinedPattern | None = None
         self._count = 0
 
-    def _add(self, rule: str, path: str, constraints: dict[str, str], default: str) -> None:
+    def _add(
+        self,
+        rule: str,
+        path: str,
+        constraints: dict[str, str],
+        default: str,
+        overrides: dict[str, str] | None = None,
+    ) -> None:
         last = _split_outside_wildcards(path)[-1]
         if _WILDCARD_RE.search(last) is None:
-            rx = re.compile(wildcard_pattern_to_regex(path, constraints, default=default))
+            rx = re.compile(wildcard_pattern_to_regex(
+                path, constraints, default=default, overrides=overrides,
+            ))
             self._by_name.setdefault(last, []).append((rule, rx))
         else:
             rx = re.compile(wildcard_pattern_to_regex(
                 path, constraints, default=default, is_directory=True,
+                overrides=overrides,
             ))
             self._generic.append((rule, rx))
         self._count += 1
@@ -595,8 +641,9 @@ def build_input_patterns(
 
     Kept apart from `build_rule_patterns` on purpose: the guards that ask
     "does this workflow write here at all?" must look at outputs only.
-    Input wildcards take the constraints of the rule's outputs, since their
-    values come from matching the outputs. Each input also covers everything
+    Input wildcards take the union of the rule's output constraints (see
+    `rule_wildcard_bodies`), since their values come from matching the
+    outputs. Each input also covers everything
     beneath it, in case it is a directory. An input that cannot be turned into
     a pattern (absolute outside the results directory, `..` after a wildcard,
     unparseable braces) is skipped without comment: inputs routinely live
@@ -605,7 +652,7 @@ def build_input_patterns(
     """
     matcher = InputMatcher()
     for spec in specs:
-        constraints = _output_wildcard_constraints(spec)
+        bodies = rule_wildcard_bodies(spec, default_wildcard_regex)
         for raw in spec.inputs:
             path, dotdot = normalise_rule_path(unicodedata.normalize("NFC", raw))
             if dotdot and path.startswith("../"):
@@ -618,7 +665,9 @@ def build_input_patterns(
                     continue
                 path = rewritten
             try:
-                matcher._add(spec.name, path, constraints, default_wildcard_regex)
+                matcher._add(
+                    spec.name, path, spec.constraints, default_wildcard_regex, bodies
+                )
             except (PatternError, re.error):
                 continue
     matcher._finish()
