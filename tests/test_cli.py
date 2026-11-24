@@ -1,4 +1,7 @@
 import os
+import shutil
+
+import pytest
 
 from typer.testing import CliRunner
 
@@ -1870,3 +1873,121 @@ def test_cli_scan_results_dir_with_decomposed_name_absolute_rule(make_pipeline, 
     assert result.exit_code == 0, result.output
     assert "dropping absolute path" not in result.stderr
     assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+_TWO_ADJACENT = (
+    "rule fit:\n"
+    "    output: 'results/{kind,inc|exc}/{pc}/{eqtl}/{opt,lbfgsb}/x.csv'\n"
+    "    shell: 'touch {output}'\n"
+)
+_TWO_ADJACENT_LIVE = [f"inc/{i}/{i}/lbfgsb/x.csv" for i in range(5)]
+_STALE = "inc/uncentered/0_01/0_01/lbfgsb/x.csv"
+
+
+def test_cli_scan_names_rule_and_all_unconstrained_wildcards(make_pipeline, make_results):
+    pipeline = make_pipeline(_TWO_ADJACENT)
+    results = make_results(_TWO_ADJACENT_LIVE + [_STALE])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "fit: 1 file(s); unconstrained: {pc} {eqtl}" in result.stderr
+    assert "constrain every wildcard" in result.stderr
+
+
+def test_cli_scan_following_the_wildcard_advice_makes_a_plain_orphan(make_pipeline, make_results):
+    # Constraining both wildcards, as the warning says, turns the stale file
+    # into an ordinary orphan; constraining only one leaves it ambiguous.
+    one = _TWO_ADJACENT.replace("output:", "wildcard_constraints: pc='[^/]+'\n    output:")
+    both = _TWO_ADJACENT.replace(
+        "output:", "wildcard_constraints: pc='[^/]+', eqtl='[^/]+'\n    output:"
+    )
+    results = None
+    for snakefile, ambiguous in ((one, True), (both, False)):
+        pipeline = make_pipeline(snakefile)
+        if results is None:
+            results = make_results(_TWO_ADJACENT_LIVE + [_STALE])
+        result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+        assert result.exit_code == 0, result.output
+        stale = str(results / _STALE)
+        if ambiguous:
+            assert f"ambiguous: {stale}" in result.stderr
+            assert "unconstrained: {eqtl}" in result.stderr
+        else:
+            assert result.stdout.split() == [stale]
+            assert "ambiguous" not in result.stderr
+        shutil.rmtree(pipeline)
+
+
+def test_cli_scan_summary_replaces_per_file_listing(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/6.txt", "sub/deep/7.csv", "junk.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--summary"])
+    assert result.exit_code == 0, result.output
+    assert str(results) not in result.stdout
+    assert "ambiguous: " not in result.stderr
+    rows = {l.split()[-1]: l.split()[:2] for l in result.stdout.splitlines()[1:]}
+    assert rows["sub/"] == ["0", "1"]
+    assert rows["sub/deep/"] == ["1", "0"]
+    assert rows["./"] == ["1", "0"]
+    assert rows["(total)"] == ["2", "1"]
+    assert "counted in the summary's ambiguous column" in result.stderr
+
+
+def test_cli_scan_summary_depth_and_delete_ambiguous(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/6.txt", "sub/deep/7.csv"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--summary", "--summary-depth", "1",
+         "--delete-ambiguous"],
+    )
+    assert result.exit_code == 0, result.output
+    rows = {l.split()[-1]: l.split()[:2] for l in result.stdout.splitlines()[1:]}
+    # Ambiguous files count as deletable when --delete-ambiguous is set.
+    assert rows["sub/"] == ["2", "0"]
+
+
+@pytest.mark.parametrize("flag", [["--delete", "--yes"], ["--trash", "TRASH", "--yes"]])
+def test_cli_scan_summary_refuses_deletion(make_pipeline, make_results, tmp_path, flag):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    flag = [str(tmp_path / "trash") if f == "TRASH" else f for f in flag]
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--summary", *flag])
+    assert result.exit_code == 3
+    assert "--summary" in result.stderr
+    assert (results / "junk.csv").exists()
+
+
+def test_cli_scan_summary_depth_must_be_positive(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE)
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--summary", "--summary-depth", "0"]
+    )
+    assert result.exit_code == 2
+
+
+def test_cli_scan_spool_write_failure_deletes_nothing(make_pipeline, make_results, monkeypatch):
+    from snakeprune import report
+
+    def _full(self):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(report.OrphanSpool, "finish", _full)
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3
+    assert "Nothing was deleted" in result.stderr
+    assert (results / "junk.csv").exists()
+
+
+def test_cli_scan_deletes_file_with_newline_in_name(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    try:
+        results = make_results(_LIVE + ["odd\nname.csv"])
+    except OSError:
+        pytest.skip("filesystem rejects newlines in names")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert not (results / "odd\nname.csv").exists()
+    assert all((results / f).exists() for f in _LIVE)

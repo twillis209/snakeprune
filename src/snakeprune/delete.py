@@ -30,7 +30,7 @@ class DeletionFailed(RuntimeError):
 
 
 def delete_orphans(
-    orphans: Iterable[OrphanFile],
+    orphans: Iterable[OrphanFile],  # iterated twice if re-iterable
     allow_symlinks: bool = False,
     trash_dir: Path | None = None,
     results_dir_name: str | None = None,
@@ -54,10 +54,14 @@ def delete_orphans(
     """
     if trash_dir is not None and results_dir_name is None:
         raise ValueError("results_dir_name is required when trash_dir is set")
-    orphans = list(orphans)
+    if iter(orphans) is orphans:
+        # A one-shot iterator cannot be walked twice (validate, then act).
+        # Re-iterable inputs such as a spooled selection are left as they are,
+        # so a huge batch is never held in memory at once.
+        orphans = list(orphans)
     if (
         trash_dir is not None
-        and orphans
+        and any(True for _ in orphans)
         and (trash_dir.exists() or trash_dir.is_symlink())
         and not trash_dir.is_dir()
     ):
@@ -67,7 +71,9 @@ def delete_orphans(
             f"choose another."
         )
     checked_ancestors: set[Path] = set()
+    total = 0
     for orphan in orphans:
+        total += 1
         path = orphan.path
         if path.is_dir() and not path.is_symlink():
             raise IsADirectoryError(f"Refusing to delete directory: {path}")
@@ -96,7 +102,6 @@ def delete_orphans(
                         f"directory, or choose another."
                     )
                 checked_ancestors.add(ancestor)
-    total = len(orphans)
     for completed, orphan in enumerate(orphans):
         path = orphan.path
         try:

@@ -23,8 +23,13 @@ from snakeprune.patterns import (
     results_match_prefix,
     rule_literal_prefixes,
 )
+from snakeprune.report import (
+    AmbiguityExplainer,
+    DirectorySummary,
+    OrphanSelection,
+    OrphanSpool,
+)
 from snakeprune.walker import (
-    OrphanFile,
     _compile_globs,
     attribute_orphan_to_rule,
     iter_results_files,
@@ -238,6 +243,19 @@ def scan(
         help="Bypass the delete/trash refusal when the working directory "
              "holds Snakemake locks (use only for stale locks from a crashed run).",
     ),
+    summary: bool = typer.Option(
+        False,
+        "--summary",
+        help="Print orphan counts and sizes per directory instead of listing "
+             "each file. Dry run only: refused with --delete/--trash, since a "
+             "table cannot show exactly what would be removed.",
+    ),
+    summary_depth: int = typer.Option(
+        2,
+        "--summary-depth",
+        min=1,
+        help="Directory levels below results_dir to group by in --summary.",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -256,6 +274,14 @@ def scan(
         raise typer.Exit(code=3)
 
     deleting = delete or trash is not None
+    if summary and deleting:
+        typer.echo(
+            "Refusing to delete: --summary shows directory totals, not the "
+            "files that would be removed. Run with --summary to survey the "
+            "tree, then without it to review the exact list before deleting.",
+            err=True,
+        )
+        raise typer.Exit(code=3)
     if deleting and os.path.realpath(results_dir) == os.path.abspath(os.sep):
         typer.echo(
             "Refusing to delete: the scanned directory is the filesystem root.",
@@ -403,40 +429,123 @@ def scan(
         raise typer.Exit(code=4)
 
     log(f"Walking {results_dir}...")
-    orphans: list[OrphanFile] = []
+    # Orphans go to a temporary file, not a list, so memory stays flat on
+    # trees with millions of them.
+    spool = OrphanSpool()
+    try:
+        _scan_and_report(
+            spool=spool,
+            results_dir=results_dir,
+            ignore=ignore,
+            follow_symlinks=follow_symlinks,
+            exclude_dirs=exclude_dirs,
+            limit=limit,
+            match_prefix=match_prefix,
+            basename_prefix=basename_prefix,
+            combined=combined,
+            permissive=permissive,
+            permissive_patterns=permissive_patterns,
+            patterns=patterns,
+            prefixes=prefixes,
+            rule_attribution=rule_attribution,
+            orphan_rate_threshold=orphan_rate_threshold,
+            allow_high_orphan_rate=allow_high_orphan_rate,
+            delete_ambiguous=delete_ambiguous,
+            deleting=deleting,
+            summary=summary,
+            summary_depth=summary_depth,
+            yes=yes,
+            allow_symlinks=allow_symlinks,
+            trash=trash,
+            results_name=results_name,
+            log=log,
+        )
+    finally:
+        spool.close()
+
+
+def _scan_and_report(
+    *,
+    spool: OrphanSpool,
+    results_dir: Path,
+    ignore,
+    follow_symlinks: bool,
+    exclude_dirs,
+    limit,
+    match_prefix: str,
+    basename_prefix: str,
+    combined,
+    permissive,
+    permissive_patterns,
+    patterns,
+    prefixes,
+    rule_attribution: bool,
+    orphan_rate_threshold: float,
+    allow_high_orphan_rate: bool,
+    delete_ambiguous: bool,
+    deleting: bool,
+    summary: bool,
+    summary_depth: int,
+    yes: bool,
+    allow_symlinks: bool,
+    trash,
+    results_name: str,
+    log,
+) -> None:
     file_count = 0
     target_prefixes = [match_prefix]
     if basename_prefix != match_prefix:
         target_prefixes.append(basename_prefix)
+    explainer = AmbiguityExplainer(permissive_patterns) if permissive_patterns else None
+    dir_summary = DirectorySummary(summary_depth) if summary else None
     walk_stats: dict = {}
-    for full_path, rel in iter_results_files(
-        results_dir,
-        ignore_globs=tuple(ignore or ()),
-        follow_symlinks=follow_symlinks,
-        exclude_dirs=tuple(set(exclude_dirs)),
-        stats=walk_stats,
-    ):
-        if limit is not None and file_count >= limit:
-            break
-        file_count += 1
-        if file_count % PROGRESS_INTERVAL == 0:
-            log(f"  scanned {file_count} files...")
-        # Rule paths are NFC-normalised; some filesystems store names decomposed.
-        norm_rel = nfc(rel)
-        targets = [tp + norm_rel for tp in target_prefixes]
-        if combined is not None and any(combined.match(t) for t in targets):
-            continue
-        ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
-        likely = None
-        if rule_attribution:
-            for t in targets:
-                likely = attribute_orphan_to_rule(t, patterns, prefixes)
-                if likely:
-                    break
-        orphans.append(
-            OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely, ambiguous=ambiguous)
+    try:
+        for full_path, rel in iter_results_files(
+            results_dir,
+            ignore_globs=tuple(ignore or ()),
+            follow_symlinks=follow_symlinks,
+            exclude_dirs=tuple(set(exclude_dirs)),
+            stats=walk_stats,
+        ):
+            if limit is not None and file_count >= limit:
+                break
+            file_count += 1
+            if file_count % PROGRESS_INTERVAL == 0:
+                log(f"  scanned {file_count} files...")
+            # Rule paths are NFC-normalised; some filesystems store names decomposed.
+            norm_rel = nfc(rel)
+            targets = [tp + norm_rel for tp in target_prefixes]
+            if combined is not None and any(combined.match(t) for t in targets):
+                continue
+            ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
+            if ambiguous and explainer is not None:
+                explainer.add(rel, targets)
+            likely = None
+            if rule_attribution:
+                for t in targets:
+                    likely = attribute_orphan_to_rule(t, patterns, prefixes)
+                    if likely:
+                        break
+            spool.add(full_path, rel, ambiguous, likely)
+            if dir_summary is not None:
+                try:
+                    size = os.lstat(full_path).st_size
+                except OSError:
+                    size = 0
+                dir_summary.add(rel, deletable=delete_ambiguous or not ambiguous, size=size)
+        spool.finish()
+    except OSError as exc:
+        # The spool is the deletion list; never act on a partial one.
+        typer.echo(
+            f"Refusing to continue: could not record the orphan list in a "
+            f"temporary file ({exc}). Nothing was deleted. Point TMPDIR at a "
+            f"filesystem with free space.",
+            err=True,
         )
-    log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
+        raise typer.Exit(code=3)
+    n_orphans = spool.count
+    n_ambiguous = spool.ambiguous_count
+    log(f"Scanned {file_count} file(s); found {n_orphans} orphan(s).")
 
     skipped_dirs = walk_stats.get("skipped_symlinked_dirs", 0)
     if skipped_dirs > 0:
@@ -456,60 +565,69 @@ def scan(
 
     high_rate = False
     if file_count > 0:
-        rate = len(orphans) / file_count
+        rate = n_orphans / file_count
         if rate > orphan_rate_threshold:
             high_rate = True
             pct = round(rate * 100)
             typer.echo(
                 f"WARNING: {pct}% of scanned files are orphans "
-                f"({len(orphans)} of {file_count}). This is unusually high and "
+                f"({n_orphans} of {file_count}). This is unusually high and "
                 f"usually indicates a config or environment problem rather than "
                 f"real cleanup. Review the list carefully before deleting.",
                 err=True,
             )
 
-    # stdout carries exactly the files --delete would remove, so a held-back
-    # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
-    for orphan in orphans:
-        line = str(orphan.path)
-        if rule_attribution and orphan.likely_rule:
-            line += f"\t(likely: {orphan.likely_rule})"
-        if orphan.ambiguous and not delete_ambiguous:
-            typer.echo(f"ambiguous: {line}", err=True)
-        else:
+    if dir_summary is not None:
+        for line in dir_summary.render():
             typer.echo(line)
+    else:
+        # stdout carries exactly the files --delete would remove, so a held-back
+        # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
+        for orphan in spool.iter_orphans():
+            line = str(orphan.path)
+            if rule_attribution and orphan.likely_rule:
+                line += f"\t(likely: {orphan.likely_rule})"
+            if orphan.ambiguous and not delete_ambiguous:
+                typer.echo(f"ambiguous: {line}", err=True)
+            else:
+                typer.echo(line)
 
-    n_ambiguous = sum(o.ambiguous for o in orphans)
     if n_ambiguous:
         fate = (
             "They will be deleted because --delete-ambiguous was passed."
             if delete_ambiguous
             else "They are never deleted unless you pass --delete-ambiguous."
         )
+        where = (
+            "counted in the summary's ambiguous column"
+            if dir_summary is not None
+            else "listed on stderr above unless --delete-ambiguous is set"
+        )
         typer.echo(
-            f"{n_ambiguous} orphan(s) are ambiguous (listed on stderr above "
-            f"unless --delete-ambiguous is set): each matches a "
+            f"{n_ambiguous} orphan(s) are ambiguous ({where}): each matches a "
             f"rule if an unconstrained wildcard is allowed to span `/`, as "
             f"Snakemake itself allows, so it may be a live output. {fate} If "
             f"they are live, pass --permissive-wildcards or constrain the "
             f"wildcard.",
             err=True,
         )
+        if explainer is not None:
+            for line in explainer.render():
+                typer.echo(line, err=True)
 
-    deletion_requested = deleting
-    if not delete_ambiguous:
-        # The listing and the orphan rate above cover every orphan; only the
-        # unambiguous ones go on to deletion.
-        orphans = [o for o in orphans if not o.ambiguous]
-    if deletion_requested and orphans:
+    # The listing and the orphan rate above cover every orphan; only the
+    # unambiguous ones go on to deletion unless --delete-ambiguous.
+    to_delete = OrphanSelection(spool, include_ambiguous=delete_ambiguous)
+    n_delete = len(to_delete)
+    if deleting and n_delete:
         total_bytes = 0
-        for o in orphans:
+        for o in to_delete:
             try:
                 total_bytes += o.path.stat().st_size
             except OSError:
                 pass
         typer.echo(
-            f"About to delete {len(orphans)} file(s), {total_bytes} byte(s).",
+            f"About to delete {n_delete} file(s), {total_bytes} byte(s).",
             err=True,
         )
         if high_rate and not allow_high_orphan_rate:
@@ -533,7 +651,7 @@ def scan(
                 raise typer.Exit(code=0)
         try:
             delete_orphans(
-                orphans,
+                to_delete,
                 allow_symlinks=allow_symlinks,
                 trash_dir=trash,
                 results_dir_name=results_name if trash is not None else None,
