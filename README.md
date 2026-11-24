@@ -95,11 +95,13 @@ _*/
 ```
 
 - Entries are relative to the results directory and anchored there (unlike `.gitignore`, `notes/` means `results/notes/`, not any `notes/`).
-- `name/` protects that directory subtree, which is skipped entirely, exactly like `--exclude-dir`. It must exist: a misspelt directory would protect nothing, so the scan is refused (exit 3) with the line number.
+- An entry naming an existing directory (`ad_hoc/`, `ad_hoc`, even `run[1]/`) protects that subtree, which is skipped entirely, exactly like `--exclude-dir`. A `name/` entry without glob characters must exist: a misspelt directory would protect nothing, so the scan is refused (exit 3) with the line number.
 - `pattern/` with glob characters (`_*/`) protects everything under any directory it matches.
 - Anything else is a glob with `--ignore` semantics.
 - A glob that matches no file is reported; under `--delete` / `--trash` the run is refused (exit 3) until you fix or remove the line, because the files it was meant to protect may be in the deletion list.
-- `!` negation, absolute paths and `..` are refused rather than guessed at. The file itself is never treated as an orphan.
+- `!` negation, absolute paths and `..` are refused rather than guessed at.
+- Only the top-level file is read. The file itself, and any nested `.snakepruneignore`, is never treated as an orphan, but a nested one is reported and refuses `--delete` / `--trash` until its entries are moved to the top-level file.
+- Scanning a subdirectory of a tree that has a `.snakepruneignore` above it bypasses that file, so `--delete` / `--trash` is refused; scan the directory that holds the file.
 
 ## Safety and limitations
 

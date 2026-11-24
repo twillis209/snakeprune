@@ -6,16 +6,16 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **261 tests**, split across six files:
+As of this writing the suite is **266 tests**, split across six files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (20) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (118) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (121) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
-- `tests/test_ignorefile.py` (6 functions, 9 cases) — is `.snakepruneignore`
+- `tests/test_ignorefile.py` (8 functions, 11 cases) — is `.snakepruneignore`
   parsed exactly, and are entries it cannot interpret refused?
 - `tests/test_report.py` (8) — does the on-disk orphan list return exactly
   what was written, and do the summary and wildcard report count correctly?
@@ -330,7 +330,14 @@ genuinely mean it.
    (`test_cli_ignore_file_missing_directory_is_refused`); a glob that matched
    nothing refuses deletion
    (`test_cli_ignore_file_unmatched_glob_warns_then_refuses_delete`); `!`
-   negation is refused (`test_cli_ignore_file_negation_is_refused`).
+   negation is refused (`test_cli_ignore_file_negation_is_refused`). It cannot
+   be bypassed by scanning a subdirectory
+   (`test_cli_ignore_file_in_parent_refuses_deleting_a_subdirectory`) or
+   misplaced in a subdirectory
+   (`test_cli_nested_ignore_file_is_not_an_orphan_and_refuses_delete`), and an
+   existing directory is protected literally even if its name has glob
+   characters or the entry lacks a trailing `/`
+   (`test_cli_ignore_file_protects_glob_named_and_slashless_directories`).
 
 ## The headline data-loss invariants
 

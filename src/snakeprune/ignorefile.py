@@ -7,9 +7,11 @@ Format, one entry per line, paths relative to the results directory (and
 anchored there, unlike ``.gitignore``):
 
 * blank lines and lines starting with ``#`` are skipped;
-* ``name/`` (no glob characters) protects that directory subtree; it must
-  exist, exactly as ``--exclude-dir`` requires, so a typo is refused rather
-  than silently protecting nothing;
+* an entry that names an existing directory, with or without a trailing
+  ``/`` and whatever characters it contains (``run[1]/``), protects that
+  directory subtree, validated exactly as ``--exclude-dir``;
+* ``name/`` with no glob characters must name an existing directory, so a
+  typo is refused rather than silently protecting nothing;
 * ``pattern/`` with glob characters (e.g. ``_*/``) protects every file under
   any directory the pattern matches;
 * anything else is a glob with ``--ignore`` semantics (``*`` crosses ``/``,
@@ -20,8 +22,11 @@ could unprotect files.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from snakeprune.walker import _compile_globs
 
 IGNORE_FILE_NAME = ".snakepruneignore"
 _GLOB_CHARS = set("*?[")
@@ -82,14 +87,36 @@ def load_ignore_file(results_dir: Path) -> IgnoreFile | None:
                 f"{where}: entries are relative to the results directory; "
                 f"drop the leading `/` or `..`"
             )
-        if line.endswith("/"):
-            body = line.rstrip("/")
-            if not body:
-                raise IgnoreFileError(f"{where}: an entry cannot be just `/`")
-            if _GLOB_CHARS & set(body):
-                result.globs.append((entry, body + "/*"))
-            else:
-                result.dirs.append((entry, body))
+        body = line.rstrip("/")
+        if not body:
+            raise IgnoreFileError(f"{where}: an entry cannot be just `/`")
+        if os.path.isdir(os.path.join(results_dir, body)):
+            # Names a real directory: protect it literally, even if the name
+            # has glob characters (`run[1]`) or lacks the trailing `/`.
+            result.dirs.append((entry, body))
+        elif line.endswith("/") and not (_GLOB_CHARS & set(body)):
+            # A directory that does not exist; let validation refuse it.
+            result.dirs.append((entry, body))
         else:
-            result.globs.append((entry, line))
+            glob = body + "/*" if line.endswith("/") else line
+            try:
+                _compile_globs([glob])
+            except ValueError as exc:
+                raise IgnoreFileError(f"{where}: {exc}") from None
+            result.globs.append((entry, glob))
     return result
+
+
+def find_ancestor_ignore_files(results_dir: Path) -> list[Path]:
+    """``.snakepruneignore`` files in directories above ``results_dir``.
+
+    Scanning a subdirectory of a protected tree would bypass the parent's
+    file, so the caller refuses deletion when any are found.
+    """
+    found = []
+    here = Path(os.path.realpath(results_dir))
+    for ancestor in here.parents:
+        candidate = ancestor / IGNORE_FILE_NAME
+        if os.path.lexists(candidate):
+            found.append(candidate)
+    return found

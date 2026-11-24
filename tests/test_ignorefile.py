@@ -50,3 +50,16 @@ def test_refuses_directory_named_like_the_file(tmp_path):
     (tmp_path / ".snakepruneignore").mkdir()
     with pytest.raises(IgnoreFileError, match="not a regular file"):
         load_ignore_file(tmp_path)
+
+
+def test_existing_directory_entry_is_literal_even_with_glob_chars(tmp_path):
+    (tmp_path / "run[1]").mkdir()
+    (tmp_path / "ad_hoc").mkdir()
+    ig = load_ignore_file(_write(tmp_path, "run[1]/\nad_hoc\n"))
+    assert [d for _, d in ig.dirs] == ["run[1]", "ad_hoc"]
+    assert ig.globs == []
+
+
+def test_too_many_double_stars_names_the_line(tmp_path):
+    with pytest.raises(IgnoreFileError, match="line 2"):
+        load_ignore_file(_write(tmp_path, "ok\na/**/b/**/c/**/d/**/x\n"))

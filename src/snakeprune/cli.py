@@ -23,7 +23,12 @@ from snakeprune.patterns import (
     results_match_prefix,
     rule_literal_prefixes,
 )
-from snakeprune.ignorefile import IGNORE_FILE_NAME, IgnoreFileError, load_ignore_file
+from snakeprune.ignorefile import (
+    IGNORE_FILE_NAME,
+    IgnoreFileError,
+    find_ancestor_ignore_files,
+    load_ignore_file,
+)
 from snakeprune.report import (
     AmbiguityExplainer,
     DirectorySummary,
@@ -346,8 +351,21 @@ def scan(
             f"Protecting {ignore_file.entry_count} entr"
             f"{'y' if ignore_file.entry_count == 1 else 'ies'} from {ignore_file.path}."
         )
-    # The ignore file itself lives in the results tree and is never an orphan.
-    ignore = [*(ignore or ()), *file_globs, IGNORE_FILE_NAME]
+    ancestor_ignore_files = find_ancestor_ignore_files(results_dir)
+    if ancestor_ignore_files:
+        typer.echo(
+            f"WARNING: {ancestor_ignore_files[0]} protects files in a directory "
+            f"above this one, and is not applied when scanning a subdirectory.",
+            err=True,
+        )
+        if deleting:
+            typer.echo(
+                f"Refusing to delete: scan {ancestor_ignore_files[0].parent} "
+                f"itself so its {IGNORE_FILE_NAME} is honoured.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+    ignore = [*(ignore or ()), *file_globs]
     try:
         _compile_globs(ignore)
         exclude_dirs = _resolve_exclude_dirs(results_dir, exclude_dir or ())
@@ -542,6 +560,7 @@ def _scan_and_report(
     )
     dir_summary = DirectorySummary(summary_depth) if summary else None
     walk_stats: dict = {}
+    nested_ignore_files: list[str] = []
     n_orphans = 0
     n_ambiguous = 0
 
@@ -565,6 +584,13 @@ def _scan_and_report(
     ):
         if limit is not None and file_count >= limit:
             break
+        if rel == IGNORE_FILE_NAME or rel.endswith("/" + IGNORE_FILE_NAME):
+            # An ignore file is never an orphan. Only the top-level one is
+            # read, so a nested one is a protection the user expects but
+            # does not have.
+            if rel != IGNORE_FILE_NAME:
+                nested_ignore_files.append(rel)
+            continue
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
@@ -625,11 +651,21 @@ def _scan_and_report(
     if unmatched:
         typer.echo(
             f"WARNING: {len(unmatched)} entr{'y' if len(unmatched) == 1 else 'ies'} "
-            f"in {ignore_file.path} matched no files (a typo protects nothing):",
+            f"in {ignore_file.path} matched no scanned file. If it is a typo, "
+            f"the files it was meant to protect may be listed above. (Files "
+            f"inside directories skipped by other entries are not scanned.)",
             err=True,
         )
         for e in unmatched:
             typer.echo(f"  line {e.line}: {e.text}", err=True)
+    if nested_ignore_files:
+        typer.echo(
+            f"WARNING: only the top-level {IGNORE_FILE_NAME} is read; these "
+            f"nested ones are not applied:",
+            err=True,
+        )
+        for rel in nested_ignore_files[:20]:
+            typer.echo(f"  {rel}", err=True)
 
     high_rate = False
     if file_count > 0:
@@ -703,8 +739,16 @@ def _scan_and_report(
         if unmatched:
             typer.echo(
                 f"Refusing to delete: {ignore_file.path.name} has entries that "
-                f"matched no files, so something you meant to protect may be in "
-                f"the list above. Fix or remove those lines.",
+                f"matched no scanned file, so something you meant to protect "
+                f"may be in the deletion list. Fix those lines, or comment out "
+                f"any that are simply not needed right now.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+        if nested_ignore_files:
+            typer.echo(
+                f"Refusing to delete: move the entries of the nested "
+                f"{IGNORE_FILE_NAME} file(s) into {results_dir / IGNORE_FILE_NAME}.",
                 err=True,
             )
             raise typer.Exit(code=3)

@@ -2069,7 +2069,7 @@ def test_cli_ignore_file_unmatched_glob_warns_then_refuses_delete(make_pipeline,
     results = _with_ignore_file(make_results(_LIVE + ["keep.lgo", "junk.csv"]), "*.log\n")
     dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert dry.exit_code == 0, dry.output
-    assert "matched no files" in dry.stderr and "line 1: *.log" in dry.stderr
+    assert "matched no scanned file" in dry.stderr and "line 1: *.log" in dry.stderr
     wet = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert wet.exit_code == 3
     assert "Refusing to delete" in wet.stderr
@@ -2083,3 +2083,46 @@ def test_cli_ignore_file_negation_is_refused(make_pipeline, make_results):
     assert result.exit_code == 3
     assert "negation" in result.stderr
     assert (results / "junk.csv").exists()
+
+
+def test_cli_ignore_file_in_parent_refuses_deleting_a_subdirectory(make_pipeline, make_results):
+    # Scanning results/_snap directly would bypass results/.snakepruneignore.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE + ["_snap/old.csv"]), "_snap/\n")
+    sub = results / "_snap"
+    dry = runner.invoke(app, ["scan", str(pipeline), str(sub), "--allow-basename-mismatch"])
+    assert "is not applied when scanning a subdirectory" in dry.stderr
+    wet = runner.invoke(
+        app, ["scan", str(pipeline), str(sub), "--allow-basename-mismatch", "--delete", "--yes"]
+    )
+    assert wet.exit_code == 3
+    assert (sub / "old.csv").exists()
+
+
+def test_cli_nested_ignore_file_is_not_an_orphan_and_refuses_delete(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/keep.csv", "junk.csv"])
+    (results / "sub" / ".snakepruneignore").write_text("keep.csv\n")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 0, dry.output
+    assert ".snakepruneignore" not in dry.stdout
+    assert "nested ones are not applied" in dry.stderr
+    wet = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert wet.exit_code == 3
+    assert (results / "sub" / ".snakepruneignore").exists()
+    assert (results / "sub" / "keep.csv").exists() and (results / "junk.csv").exists()
+
+
+def test_cli_ignore_file_protects_glob_named_and_slashless_directories(make_pipeline, make_results):
+    # `run[1]/` names a real directory, so it is protected literally even with
+    # a sibling `run1/` the glob reading would match; `ad_hoc` lacks the slash.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(
+        make_results(_LIVE + ["run[1]/a.csv", "run1/b.csv", "ad_hoc/c.csv"]),
+        "run[1]/\nad_hoc\n",
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert (results / "run[1]/a.csv").exists()
+    assert (results / "ad_hoc/c.csv").exists()
+    assert not (results / "run1/b.csv").exists()
