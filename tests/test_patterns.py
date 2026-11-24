@@ -1244,3 +1244,23 @@ def test_allow_wildcard_absolute_paths_skips_with_a_warning():
                              on_warning=warnings.append)
     assert [n for n, _ in pats] == ["r"] and len(m) == 0
     assert len(warnings) == 2 and all("rule `r`" in w for w in warnings)
+
+
+def test_find_rule_patterns_accepts_the_wildcard_absolute_override(make_pipeline, make_results):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: '/nowhere/elsewhere/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    with pytest.raises(_PatternError):
+        find_rule_patterns(pipeline, results_dir=results)
+    warnings: list[str] = []
+    patterns = find_rule_patterns(
+        pipeline, results_dir=results, on_warning=warnings.append,
+        allow_wildcard_absolute=True,
+    )
+    assert [n for n, _ in patterns] == ["b"] and len(warnings) == 1

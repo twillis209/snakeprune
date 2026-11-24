@@ -529,6 +529,7 @@ def find_rule_patterns(
     on_warning: Callable[[str], None] | None = None,
     results_dir: Path | None = None,
     match_prefix: str | None = None,
+    allow_wildcard_absolute: bool = False,
 ) -> list[tuple[str, re.Pattern]]:
     """Top-level: return one (rule_name, compiled_regex) per produced path.
 
@@ -543,7 +544,11 @@ def find_rule_patterns(
     `<match_prefix><rel>` (`match_prefix` defaults to `<results-dir-name>/`)
     and used normally. Otherwise it can never match
     a scanned file; it is skipped and reported through `on_warning` (if given)
-    so the user knows the live set is narrower than the workflow.
+    so the user knows the live set is narrower than the workflow. An
+    absolute path with a wildcard that does not lie under `results_dir`
+    raises `PatternError` unless `allow_wildcard_absolute` (the CLI's
+    `--allow-wildcard-absolute-paths`), when it too is dropped with a
+    warning.
     """
     # Pre-check: surface SnakefileNotFound before spawning the extractor
     # subprocess, so a missing Snakefile exits 2 (not 4 via ExtractorError).
@@ -555,6 +560,7 @@ def find_rule_patterns(
         on_warning=on_warning,
         results_dir=results_dir,
         match_prefix=match_prefix,
+        allow_wildcard_absolute=allow_wildcard_absolute,
     )
 
 
