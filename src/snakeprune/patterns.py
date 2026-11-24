@@ -220,8 +220,10 @@ class ExtractedWorkflow:
 
     ``workdir_source`` says where the workdir came from: ``"default"`` (the
     Snakefile's directory, or its parent for ``workflow/Snakefile``),
-    ``"directive"`` (the Snakefile's ``workdir:``) or ``"option"``
-    (``--directory``).
+    ``"directive"`` (the Snakefile's ``workdir:``), ``"option"``
+    (``--directory``) or ``"chdir"`` (the Snakefile changed directory some
+    other way while it was parsed). In every case it is the directory
+    Snakemake ends up in after parsing, where it runs the jobs.
     """
     rules: list[RuleSpec]
     workdir: Path

@@ -1,4 +1,5 @@
 # tests/test_patterns.py
+import os
 import pytest
 
 def test_make_pipeline_writes_snakefile(make_pipeline):
@@ -1116,3 +1117,54 @@ def test_input_with_unresolvable_dotdot_is_refused():
 def test_input_naming_the_working_directory_is_refused():
     with pytest.raises(_PatternError):
         _build(outputs=["results/{s}.txt"], inputs=["."])
+
+
+def test_extract_workflow_reports_the_directory_snakemake_ends_up_in(make_pipeline):
+    from snakeprune.patterns import extract_workflow
+
+    pipeline = make_pipeline(
+        "import os\n"
+        'workdir: "run"\n'
+        "HERE = os.getcwd()\n"
+        "rule a:\n"
+        "    output: os.path.join(HERE, 'results/{s}.txt')\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (pipeline / "run").mkdir()
+    wf = extract_workflow(pipeline)
+    assert wf.workdir_source == "directive"
+    assert os.path.samefile(wf.workdir, pipeline / "run")
+    assert wf.rules[0].outputs == ["results/{s}.txt"]
+
+
+def test_extract_workflow_relative_pipeline_dir_and_configfile(make_pipeline, tmp_path, monkeypatch):
+    from snakeprune.patterns import extract_workflow
+
+    pipeline = make_pipeline(
+        'workdir: "run"\n'
+        "rule a:\n"
+        "    output: config['out'] + '/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (pipeline / "run").mkdir()
+    (tmp_path / "c.yaml").write_text("out: results\n")
+    monkeypatch.chdir(tmp_path)
+    wf = extract_workflow(Path("pipeline"), configfiles=[Path("c.yaml")])
+    assert wf.rules[0].outputs == ["results/{s}.txt"]
+    assert os.path.samefile(wf.workdir, pipeline / "run")
+
+
+def test_extract_workflow_follows_a_chdir_made_while_parsing(make_pipeline):
+    from snakeprune.patterns import extract_workflow
+
+    pipeline = make_pipeline(
+        "import os\n"
+        "os.chdir('elsewhere')\n"
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (pipeline / "elsewhere").mkdir()
+    wf = extract_workflow(pipeline)
+    assert wf.workdir_source == "chdir"
+    assert os.path.samefile(wf.workdir, pipeline / "elsewhere")

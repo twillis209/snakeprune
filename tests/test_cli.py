@@ -1751,16 +1751,6 @@ def test_cli_scan_workdir_directive_resolves_leading_dotdot(make_pipeline, tmp_p
     assert result.stdout.split() == [str(store / "junk.csv")]
 
 
-def test_cli_scan_workdir_directive_is_not_created(make_pipeline, make_results, tmp_path):
-    missing = tmp_path / "never" / "made"
-    pipeline = make_pipeline(f"workdir: {str(missing)!r}\n" + _ONE_RULE)
-    results = make_results(_LIVE)
-    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
-    assert result.exit_code == 0, result.output
-    assert not missing.exists()
-    assert result.stdout == ""
-
-
 def test_cli_scan_directory_option_sets_workdir(make_pipeline, tmp_path):
     run, final = _nested_layout(tmp_path)
     pipeline = make_pipeline(
@@ -2580,3 +2570,40 @@ def test_cli_absolute_input_that_may_lie_in_results_refuses(make_pipeline, tmp_p
     assert result.exit_code == 4, result.output
     assert "rule `a`" in result.stderr and "input" in result.stderr
     assert result.stdout == ""
+
+
+def test_cli_workdir_directive_is_honoured_while_the_snakefile_is_parsed(make_pipeline):
+    # Snakemake chdirs into `workdir:` as the directive runs, so later
+    # parse-time code (here os.path.abspath) sees run/; `snakemake -n`
+    # writes run/results/{s}.txt. The extractor must parse the same way.
+    pipeline = make_pipeline(
+        "import os\n"
+        'workdir: "run"\n'
+        "rule a:\n"
+        "    output: os.path.abspath('results/{s}.txt')\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = pipeline / "run" / "results"
+    results.mkdir(parents=True)
+    for name in _LIVE + ["b.txt", "junk.csv"]:
+        (results / name).touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+    assert (results / "b.txt").exists()
+    assert "dropping" not in result.stderr
+
+
+def test_cli_missing_workdir_directive_target_is_refused_not_created(
+    make_pipeline, make_results, tmp_path
+):
+    # Snakemake would create it; snakeprune must not, and cannot parse the
+    # Snakefile as Snakemake would without it, so it refuses.
+    missing = tmp_path / "never" / "made"
+    pipeline = make_pipeline(f"workdir: {str(missing)!r}\n" + _ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4, result.output
+    assert "does not exist" in result.stderr
+    assert result.stdout == ""
+    assert not missing.exists()

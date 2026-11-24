@@ -411,6 +411,9 @@ def scan(
         workdir = extracted.workdir
         if extracted.workdir_source == "directive":
             log(f"Workflow sets `workdir: {workdir}`; rule paths are read relative to it.")
+        elif extracted.workdir_source == "chdir":
+            log(f"The Snakefile changes directory to {workdir} while it is parsed; "
+                f"rule paths are read relative to it.")
         locks_dir = workdir / ".snakemake" / "locks"
         if not allow_locked and locks_dir.is_dir() and any(locks_dir.iterdir()):
             typer.echo(
