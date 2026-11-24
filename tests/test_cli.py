@@ -2393,3 +2393,20 @@ def test_cli_second_top_level_ignore_file_variant_refuses(make_pipeline, make_re
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert result.exit_code == 3, result.output
     assert (results / "junk.csv").exists()
+
+
+def test_cli_orphan_rate_ignores_files_kept_only_as_inputs(make_pipeline, make_results):
+    # Files kept only because a rule reads them must not dilute the orphan
+    # rate: 2 orphans against 1 produced file is 67%, whatever the inputs.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: 'results/raw/{n}.in'\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    raw = [f"raw/{i}.in" for i in range(8)]
+    results = make_results(["1.txt", *raw, "o1.csv", "o2.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3, result.output
+    assert "67% of scanned files" in result.stderr or "(2 of 3)" in result.stderr
+    assert (results / "o1.csv").exists()

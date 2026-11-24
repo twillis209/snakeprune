@@ -726,14 +726,19 @@ def _scan_and_report(
             typer.echo(f"  {rel}", err=True)
 
     high_rate = False
-    if file_count > 0:
-        rate = n_orphans / file_count
+    # Files kept only as inputs say nothing about whether the workflow's
+    # outputs were matched correctly, so they are left out of the rate.
+    rated = file_count - kept_as_input
+    if rated > 0:
+        rate = n_orphans / rated
         if rate > orphan_rate_threshold:
             high_rate = True
             pct = round(rate * 100)
             typer.echo(
                 f"WARNING: {pct}% of scanned files are orphans "
-                f"({n_orphans} of {file_count}). This is unusually high and "
+                f"({n_orphans} of {rated}"
+                f"{' not kept only as inputs' if kept_as_input else ''}). "
+                f"This is unusually high and "
                 f"usually indicates a config or environment problem rather than "
                 f"real cleanup. Review the list carefully before deleting.",
                 err=True,
