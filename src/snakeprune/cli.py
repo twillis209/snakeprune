@@ -217,9 +217,9 @@ def scan(
     delete_ambiguous: bool = typer.Option(
         False,
         "--delete-ambiguous",
-        help="Also delete orphans marked (ambiguous): files that match a rule "
-             "only if an unconstrained wildcard spans `/`. By default they "
-             "are listed but never deleted.",
+        help="Also delete ambiguous orphans: files that match a rule only "
+             "if an unconstrained wildcard spans `/`. By default they are "
+             "reported on stderr and never deleted.",
     ),
     directory: Optional[Path] = typer.Option(
         None,
@@ -376,7 +376,7 @@ def scan(
     # The workflow may have run in a different directory than the extractor
     # assumed (`workdir:` / `-d`), so a file is also live if it matches under
     # the results-dir basename.
-    basename_prefix = results_name + "/"
+    basename_prefix = nfc(results_name) + "/"
     if patterns and not allow_basename_mismatch:
         results_prefix = match_prefix
         rule_prefixes = [prefix for _, prefix in prefixes]
@@ -468,13 +468,16 @@ def scan(
                 err=True,
             )
 
+    # stdout carries exactly the files --delete would remove, so a held-back
+    # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
     for orphan in orphans:
         line = str(orphan.path)
         if rule_attribution and orphan.likely_rule:
             line += f"\t(likely: {orphan.likely_rule})"
-        if orphan.ambiguous:
-            line += "\t(ambiguous)"
-        typer.echo(line)
+        if orphan.ambiguous and not delete_ambiguous:
+            typer.echo(f"ambiguous: {line}", err=True)
+        else:
+            typer.echo(line)
 
     n_ambiguous = sum(o.ambiguous for o in orphans)
     if n_ambiguous:
@@ -484,7 +487,8 @@ def scan(
             else "They are never deleted unless you pass --delete-ambiguous."
         )
         typer.echo(
-            f"{n_ambiguous} orphan(s) are marked (ambiguous): each matches a "
+            f"{n_ambiguous} orphan(s) are ambiguous (listed on stderr above "
+            f"unless --delete-ambiguous is set): each matches a "
             f"rule if an unconstrained wildcard is allowed to span `/`, as "
             f"Snakemake itself allows, so it may be a live output. {fate} If "
             f"they are live, pass --permissive-wildcards or constrain the "

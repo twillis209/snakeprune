@@ -4,14 +4,10 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
-import unicodedata
 from pathlib import Path
 from typing import Iterable, Iterator
 
-
-def nfc(text: str) -> str:
-    """Unicode NFC form of ``text`` (some filesystems store names decomposed)."""
-    return text if text.isascii() else unicodedata.normalize("NFC", text)
+from snakeprune.patterns import extract_literal_prefix, nfc
 
 
 # Each `**/` multiplies the regex's worst-case backtracking by the path depth.
@@ -43,7 +39,11 @@ def _compile_globs(globs: Iterable[str]) -> re.Pattern | None:
             )
         alternatives.append(_glob_regex(glob))
         if glob.endswith("/**"):
-            alternatives.append(_glob_regex(glob[: -len("/**")]))
+            # `sub/**` covers `sub` itself and everything under it, with the
+            # prefix read both as a glob and as literal text (`run[1]/**`).
+            prefix = glob[: -len("/**")]
+            alternatives.append(_glob_regex(prefix))
+            alternatives.append(re.escape(prefix) + "(?s:/.*)?")
     if not alternatives:
         return None
     return re.compile("|".join(f"(?:{a})" for a in alternatives))
@@ -148,8 +148,6 @@ def iter_results_files(
 
 
 from dataclasses import dataclass
-
-from snakeprune.patterns import extract_literal_prefix
 
 
 @dataclass(frozen=True)

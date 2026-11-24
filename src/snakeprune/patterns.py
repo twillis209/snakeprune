@@ -20,6 +20,11 @@ _WILDCARD_RE = re.compile(
     r"(?:\s*,\s*(?P<constraint>(?:[^{}]++|\{\d+(?:,\d+)?\})*+))?\s*\}"
 )
 
+def nfc(text: str) -> str:
+    """Unicode NFC form of `text` (some filesystems store names decomposed)."""
+    return text if text.isascii() else unicodedata.normalize("NFC", text)
+
+
 DEFAULT_WILDCARD_REGEX = r"[^/]+"
 SNAKEMAKE_WILDCARD_REGEX = r".+"
 
@@ -361,8 +366,8 @@ def results_match_prefix(
             if rd == wd:
                 return ""
             if wd in rd.parents:
-                return rd.relative_to(wd).as_posix() + "/"
-    return results_dir_name(results_dir) + "/"
+                return nfc(rd.relative_to(wd).as_posix()) + "/"
+    return nfc(results_dir_name(results_dir)) + "/"
 
 
 def _rewrite_under_results_dir(
@@ -378,13 +383,14 @@ def _rewrite_under_results_dir(
     if results_dir is None:
         return None
     if match_prefix is None:
-        match_prefix = results_dir_name(results_dir) + "/"
+        match_prefix = nfc(results_dir_name(results_dir)) + "/"
     cut = path.find("{")
     literal = path if cut == -1 else path[:cut]
     literal_dir = literal[: literal.rfind("/")]
     resolved = os.path.realpath(literal_dir or "/").rstrip("/") + path[len(literal_dir) :]
-    bases = (os.path.abspath(results_dir), os.path.realpath(results_dir))
-    for candidate in dict.fromkeys((path, resolved)):
+    # Compared in NFC: the rule text and the on-disk spelling may differ in form.
+    bases = (nfc(os.path.abspath(results_dir)), nfc(os.path.realpath(results_dir)))
+    for candidate in dict.fromkeys((nfc(path), nfc(resolved))):
         for base in bases:
             if candidate.startswith(base + "/"):
                 return match_prefix + candidate[len(base) + 1 :]

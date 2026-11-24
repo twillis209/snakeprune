@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **223 tests**, split across four files:
+As of this writing the suite is **226 tests**, split across four files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (18) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (99) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (102) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -128,11 +128,11 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
   (`test_cli_delete_refused_when_results_dir_is_workdir`,
   `test_cli_delete_workdir_allowed_with_override`).
 - A file is live if it matches under the workdir-relative prefix *or* the
-  results-dir basename, so a `workdir:` directive the extractor cannot see does
-  not orphan relative outputs
+  results-dir basename, so running `snakemake` from a directory snakeprune does
+  not know about does not orphan relative outputs
   (`test_cli_scan_workdir_directive_with_absolute_rule_keeps_relative_outputs`).
 - An orphan that matches a rule only if an unconstrained wildcard spans `/` is
-  listed as `(ambiguous)` and held back from `--delete` and `--trash` unless
+  reported on stderr (never stdout) and held back from `--delete` and `--trash` unless
   `--delete-ambiguous` is passed; an explicitly constrained wildcard is never
   ambiguous (`test_cli_scan_ambiguous_orphan_is_listed_but_not_deleted`,
   `test_cli_scan_only_ambiguous_orphans_deletes_nothing`,
@@ -154,7 +154,13 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
   `test_cli_scan_directory_option_sets_workdir`).
 - Names stored decomposed on disk match composed rule text and `--ignore` globs
   (`test_cli_scan_matches_decomposed_unicode_names_on_disk`,
-  `test_cli_scan_ignore_glob_matches_decomposed_unicode_names`).
+  `test_cli_scan_ignore_glob_matches_decomposed_unicode_names`), including
+  when the results directory's own name is the decomposed one
+  (`test_cli_scan_results_dir_with_decomposed_name_relative_rule`,
+  `test_cli_scan_results_dir_with_decomposed_name_absolute_rule`).
+- `--ignore "dir/**"` reads `dir` both as a glob and as literal text, so
+  `run[1]/**` protects a directory named `run[1]`
+  (`test_cli_scan_ignore_subdir_glob_treats_prefix_literally_too`).
 - `--ignore` globs compile to one regex; repeated `**/` collapse and more than
   three separate `**/` are refused
   (`test_ignore_glob_repeated_double_stars_collapse`,

@@ -907,7 +907,8 @@ def test_cli_scan_files_inside_directory_output_are_live(make_pipeline, make_res
 def test_cli_scan_permissive_wildcards_matches_slash_in_wildcard(make_pipeline, make_results):
     # Snakemake's own default wildcard regex is `.+`, which spans `/`. A file
     # Snakemake produced with sample='x/y' is live under --permissive-wildcards
-    # (and, deliberately, an orphan under the stricter default — see README).
+    # (and, deliberately, an ambiguous orphan under the stricter default,
+    # reported on stderr and kept off the deletable stdout list — see README).
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{sample}/flat.txt'\n"
@@ -916,8 +917,8 @@ def test_cli_scan_permissive_wildcards_matches_slash_in_wildcard(make_pipeline, 
     results = make_results(["x/y/flat.txt", "x/flat.txt"])
     strict = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert strict.exit_code == 0, strict.output
-    assert "x/y/flat.txt" in strict.stdout
-    assert "x/flat.txt" not in strict.stdout
+    assert f"ambiguous: {results / 'x' / 'y' / 'flat.txt'}" in strict.stderr
+    assert strict.stdout == ""
     permissive = runner.invoke(
         app, ["scan", str(pipeline), str(results), "--permissive-wildcards"]
     )
@@ -1610,12 +1611,13 @@ def test_cli_scan_ambiguous_orphan_is_listed_but_not_deleted(make_pipeline, make
     results = make_results(_LIVE + ["sub/6.txt", "junk.csv"])
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert result.exit_code == 0, result.output
-    assert f"{results / 'sub' / '6.txt'}\t(ambiguous)" in result.stdout
+    # stdout is exactly the deletion set; the held-back file is on stderr.
+    assert result.stdout.split() == [str(results / "junk.csv")]
+    assert f"ambiguous: {results / 'sub' / '6.txt'}" in result.stderr
     assert "--delete-ambiguous" in result.stderr
     assert "About to delete 1 file(s)" in result.stderr
     assert (results / "sub" / "6.txt").exists()
     assert not (results / "junk.csv").exists()
-    assert "(ambiguous)" not in [l for l in result.stdout.splitlines() if "junk.csv" in l][0]
 
 
 def test_cli_scan_only_ambiguous_orphans_deletes_nothing(make_pipeline, make_results):
@@ -1634,6 +1636,7 @@ def test_cli_scan_delete_ambiguous_flag_deletes_them(make_pipeline, make_results
         app, ["scan", str(pipeline), str(results), "--delete", "--yes", "--delete-ambiguous"]
     )
     assert result.exit_code == 0, result.output
+    assert str(results / "sub" / "6.txt") in result.stdout.split()
     assert not (results / "sub" / "6.txt").exists()
     assert not (results / "junk.csv").exists()
 
@@ -1658,7 +1661,7 @@ def test_cli_scan_constrained_wildcard_orphan_is_not_ambiguous(make_pipeline, ma
     results = make_results(_LIVE + ["sub/6.txt"])
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
     assert result.exit_code == 0, result.output
-    assert "(ambiguous)" not in result.stdout
+    assert "ambiguous" not in result.stderr
     assert not (results / "sub" / "6.txt").exists()
 
 
@@ -1821,3 +1824,49 @@ def test_cli_scan_ignore_glob_with_too_many_double_stars_refuses(make_pipeline, 
     )
     assert result.exit_code == 3, result.output
     assert "--ignore" in result.stderr
+
+
+def test_cli_scan_ignore_subdir_glob_treats_prefix_literally_too(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["run[1]/notes.md"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--ignore", "run[1]/**"]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+
+
+def _decomposed_results(tmp_path):
+    import unicodedata
+
+    results = tmp_path / unicodedata.normalize("NFD", "caf\u00e9")
+    results.mkdir()
+    for name in _LIVE + ["junk.csv"]:
+        (results / name).touch()
+    return results
+
+
+def test_cli_scan_results_dir_with_decomposed_name_relative_rule(make_pipeline, tmp_path):
+    results = _decomposed_results(tmp_path)
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'caf\u00e9/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_cli_scan_results_dir_with_decomposed_name_absolute_rule(make_pipeline, tmp_path):
+    results = _decomposed_results(tmp_path)
+    composed = str(tmp_path / "caf\u00e9")
+    pipeline = make_pipeline(
+        "rule a:\n"
+        f"    output: {composed + '/{n}.txt'!r}\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert "dropping absolute path" not in result.stderr
+    assert result.stdout.split() == [str(results / "junk.csv")]
