@@ -192,6 +192,9 @@ class RuleSpec:
             break the workflow.
         dynamic_inputs: how many input entries are functions, whose paths
             cannot be known without running the DAG; they protect nothing.
+        logs: the subset of ``outputs`` that are ``log`` or ``benchmark``
+            paths. Snakemake matches jobs against true outputs only, so these
+            do not widen the wildcard union (see `rule_wildcard_bodies`).
     """
     name: str
     outputs: list[str]
@@ -199,6 +202,7 @@ class RuleSpec:
     directories: list[str] = field(default_factory=list)
     inputs: list[str] = field(default_factory=list)
     dynamic_inputs: int = 0
+    logs: list[str] = field(default_factory=list)
 
 
 class ExtractorError(RuntimeError):
@@ -334,6 +338,7 @@ def extract_workflow(
             directories=list(r.get("directories", [])),
             inputs=list(r.get("inputs", [])),
             dynamic_inputs=int(r.get("dynamic_inputs", 0)),
+            logs=list(r.get("logs", [])),
         )
         for r in payload["rules"]
     ]
@@ -524,8 +529,14 @@ def build_rule_patterns(
     out: list[tuple[str, re.Pattern]] = []
     for spec in specs:
         bodies = rule_wildcard_bodies(spec, default_wildcard_regex)
+        log_set = set(spec.logs)
         for output_str in spec.outputs:
             is_directory = output_str in spec.directories
+            path_bodies = (
+                rule_wildcard_bodies(spec, default_wildcard_regex, also=output_str)
+                if output_str in log_set
+                else bodies
+            )
             raw_path = output_str
             output_str = unicodedata.normalize("NFC", output_str)
             output_str, dotdot = normalise_rule_path(output_str)
@@ -570,7 +581,7 @@ def build_rule_patterns(
                 spec.constraints,
                 default=default_wildcard_regex,
                 is_directory=is_directory,
-                overrides=bodies,
+                overrides=path_bodies,
             )
             try:
                 compiled = re.compile(regex_str)
@@ -583,14 +594,19 @@ def build_rule_patterns(
     return out
 
 
-def rule_wildcard_bodies(spec: RuleSpec, default: str) -> dict[str, str]:
+def rule_wildcard_bodies(
+    spec: RuleSpec, default: str, also: str | None = None
+) -> dict[str, str]:
     """The regex body each wildcard of a rule must accept, in every path.
 
     A job's wildcard values come from matching any one of the rule's
-    outputs, each under its own effective constraint (inline, then
-    rule-level / global, then `default`); every output, log, benchmark and
-    input is then formatted with those values. So each wildcard accepts the
-    union of its constraints over the outputs. One distinct constraint is
+    outputs (not its logs or benchmarks, which are never matched to pick a
+    job), each under its own effective constraint (inline, then rule-level
+    / global, then `default`); every output, log, benchmark and input is
+    then formatted with those values. So each wildcard accepts the union of
+    its constraints over the outputs. `also` (a log or benchmark path) adds
+    that path's own constraints to the union, so it never matches less than
+    it would on its own. One distinct constraint is
     used as is (the regex is unchanged); several become an alternation, with
     `default` first when an output leaves the wildcard unconstrained (which
     `AmbiguityExplainer` relies on). A constraint with numeric
@@ -598,7 +614,11 @@ def rule_wildcard_bodies(spec: RuleSpec, default: str) -> dict[str, str]:
     widened to Snakemake's own `.+`.
     """
     bodies: dict[str, list[str]] = {}
-    for output_str in spec.outputs:
+    logs = set(spec.logs)
+    paths = [o for o in spec.outputs if o not in logs]
+    if also is not None:
+        paths.append(also)
+    for output_str in paths:
         seen: set[str] = set()
         for m in _WILDCARD_RE.finditer(output_str):
             name = m.group("name")

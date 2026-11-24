@@ -1168,3 +1168,27 @@ def test_extract_workflow_follows_a_chdir_made_while_parsing(make_pipeline):
     wf = extract_workflow(pipeline)
     assert wf.workdir_source == "chdir"
     assert os.path.samefile(wf.workdir, pipeline / "elsewhere")
+
+
+def test_log_paths_do_not_widen_the_union_but_keep_their_own_constraint():
+    spec = RuleSpec(
+        name="r",
+        outputs=[r"results/{s,\d+}.txt", "results/logs/{s}.log"],
+        constraints={},
+        logs=["results/logs/{s}.log"],
+    )
+    out, log = [rx for _, rx in _brp([spec], Path("/wd"))]
+    assert out.pattern == r"^results/(?P<s>\d+)\.txt$"
+    assert log.match("results/logs/abc.log") and log.match("results/logs/1.log")
+
+
+def test_run_extractor_marks_log_and_benchmark_paths(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s}.txt'\n"
+        "    log: 'logs/{s}.log'\n"
+        "    benchmark: 'bench/{s}.tsv'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    (spec,) = run_extractor(pipeline)
+    assert spec.logs == ["logs/{s}.log", "bench/{s}.tsv"]

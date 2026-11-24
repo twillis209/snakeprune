@@ -2607,3 +2607,36 @@ def test_cli_missing_workdir_directive_target_is_refused_not_created(
     assert "does not exist" in result.stderr
     assert result.stdout == ""
     assert not missing.exists()
+
+
+def test_cli_log_without_inline_constraint_does_not_widen_outputs(make_pipeline, make_results):
+    # Snakemake does not copy an output's inline constraint into the log
+    # path, and jobs are only ever matched against outputs, so the log's bare
+    # {s} must not widen the output's \d+.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{s,\\\\d+}.txt'\n"
+        "    log: 'results/logs/{s}.log'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(
+        [f"{i}.txt" for i in range(4)] + [f"logs/{i}.log" for i in range(4)] + ["abc.txt"]
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "abc.txt")]
+    assert "ambiguous" not in result.stderr
+
+
+def test_cli_top_level_ignore_variant_that_was_not_loaded_refuses(
+    make_pipeline, make_results, monkeypatch
+):
+    # Whatever the filesystem, a top-level entry of that name that is not the
+    # file actually loaded is treated as a nested ignore file.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["keep.csv", "junk.csv"])
+    (results / ".snakepruneignore").write_text("keep.csv\n")
+    monkeypatch.setattr("snakeprune.cli._same_file", lambda a, b: False)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3, result.output
+    assert (results / "junk.csv").exists()

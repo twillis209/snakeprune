@@ -873,5 +873,11 @@ def _scan_and_report(
             raise typer.Exit(code=3)
         except OSError as exc:
             # delete_orphans reports any failure once removal has begun as
-            # DeletionFailed, so a bare OSError comes from validation.
-            raise _spool_failed(exc)
+            # DeletionFailed, so a bare OSError comes from validation (reading
+            # the list back, or checking an orphan or the trash directory).
+            typer.echo(
+                f"Refusing to delete: checking the deletion batch failed "
+                f"({exc}). Nothing was deleted.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
