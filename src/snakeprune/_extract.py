@@ -12,7 +12,6 @@ on stdout:
      "rules": [{"name": str,
                 "outputs": list[str],       # raw path strings, inline {name,regex} kept
                 "directories": list[str],   # subset of outputs flagged directory()
-                "logs": list[str],          # subset of outputs that are log/benchmark
                 "inputs": list[str],        # static input paths (functions skipped)
                 "dynamic_inputs": int,      # input entries that are functions
                 "constraints": dict[str, str]}, ...]}
@@ -181,15 +180,6 @@ def _load_workflow(
                 for o in rule.output
                 if is_flagged(o, "directory")
             ]
-            # Logs and benchmarks: written with a job's wildcard values but
-            # never matched to pick them, so they do not widen the union.
-            true_outputs = {_relativise(str(o), workdir) for o in rule.output}
-            logs = [
-                p for p in dict.fromkeys(
-                    _relativise(str(o), workdir) for o in produced[len(rule.output):]
-                )
-                if p not in true_outputs
-            ]
             inputs: list[str] = []
             dynamic_inputs = 0
             for i in rule.input:
@@ -205,7 +195,6 @@ def _load_workflow(
                     "name": rule.name,
                     "outputs": raw_outputs,
                     "directories": directories,
-                    "logs": logs,
                     "inputs": list(dict.fromkeys(inputs)),
                     "dynamic_inputs": dynamic_inputs,
                     "constraints": {**global_constraints, **rule_constraints},

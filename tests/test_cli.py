@@ -2609,23 +2609,24 @@ def test_cli_missing_workdir_directive_target_is_refused_not_created(
     assert not missing.exists()
 
 
-def test_cli_log_without_inline_constraint_does_not_widen_outputs(make_pipeline, make_results):
-    # Snakemake does not copy an output's inline constraint into the log
-    # path, and jobs are only ever matched against outputs, so the log's bare
-    # {s} must not widen the output's \d+.
+def test_cli_log_request_decides_wildcards_so_union_includes_logs(make_pipeline, make_results):
+    # Snakemake matches a requested file against outputs, logs and
+    # benchmarks (Rule.products): `snakemake results/logs/A1.log` runs a job
+    # with s=A1 that also writes results/A1.txt, though the output's own
+    # constraint is [a-z]+. So A1.txt is live.
     pipeline = make_pipeline(
         "rule a:\n"
-        "    output: 'results/{s,\\\\d+}.txt'\n"
+        "    output: 'results/{s,[a-z]+}.txt'\n"
         "    log: 'results/logs/{s}.log'\n"
-        "    shell: 'touch {output}'\n"
+        "    shell: 'touch {output} {log}'\n"
     )
     results = make_results(
-        [f"{i}.txt" for i in range(4)] + [f"logs/{i}.log" for i in range(4)] + ["abc.txt"]
+        [f"{c}.txt" for c in "abcd"] + [f"logs/{c}.log" for c in "abcd"]
+        + ["A1.txt", "logs/A1.log", "junk.csv"]
     )
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
-    assert result.stdout.split() == [str(results / "abc.txt")]
-    assert "ambiguous" not in result.stderr
+    assert result.stdout.split() == [str(results / "junk.csv")]
 
 
 def test_cli_top_level_ignore_variant_that_was_not_loaded_refuses(
