@@ -13,6 +13,8 @@ Experimentation in bioinformatics typically entails exploration of an ever-expan
 
 `snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per file a rule produces (its `output`, `log`, and `benchmark` paths), walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
 
+As with any program intended to delete files: USE AT YOUR OWN RISK!
+
 ## Install
 
 `snakeprune` itself is a small pure-Python CLI. It is not on PyPI; install it straight from GitHub. The recommended way is [`pipx`](https://pipx.pypa.io/), so it lives in its own isolated env and works against any workflow:
@@ -60,6 +62,9 @@ snakeprune scan path/to/pipeline path/to/results --trash path/to/trash
 
 # Pass config to the workflow loader so config-gated rules are visible
 snakeprune scan path/to/pipeline path/to/results --configfile path/to/config.yaml
+
+# The workflow was run with `snakemake -d path/to/rundir`
+snakeprune scan path/to/pipeline path/to/rundir/results --directory path/to/rundir
 ```
 
 `path/to/pipeline` is the directory that holds either `Snakefile` or `workflow/Snakefile`; for the recommended `workflow/Snakefile` layout that is the project root. `snakeprune` looks for `<pipeline>/Snakefile` first, then `<pipeline>/workflow/Snakefile`.
@@ -69,7 +74,7 @@ Run `snakeprune scan --help` for the full list of options.
 ### Notes on options
 
 - **`--exclude-dir` vs `--ignore`.** `--exclude-dir DIR` prunes a whole subtree from the walk (the directory is never descended into), which is faster than `--ignore "DIR/**"` for large directories you want to protect. `--ignore` remains for file-level glob filtering. Relative `--exclude-dir` paths resolve against the results directory, not the current directory; a value that cannot be honoured is refused (see *Bad `--exclude-dir`* below).
-- **`--ignore` globs.** `*` crosses `/`, and `**/` also matches zero directories, so `--ignore "**/*.bai"` covers `.bai` files at the top level as well as nested ones.
+- **`--ignore` globs.** `*` crosses `/`, and `**/` also matches zero directories, so `--ignore "**/*.bai"` covers `.bai` files at the top level as well as nested ones. A glob may use `**/` in at most three separate places; more is refused (exit 3) because matching would become very slow.
 - **`print()` in Snakefiles is fine.** Anything the workflow (or its child processes) writes to stdout is diverted to stderr so it cannot corrupt the extractor's JSON.
 
 ## Safety and limitations
@@ -80,10 +85,10 @@ Run `snakeprune scan --help` for the full list of options.
 
 The guards below catch a wrong target or a broken workflow load. They cannot catch a file that is live but that no rule pattern describes. Check the dry-run list for these four cases, each explained under [Limitations](#limitations):
 
-- **A wildcard value containing `/`** (e.g. `sample=batch1/s1`) is reported as an orphan unless you pass `--permissive-wildcards` or constrain the wildcard.
+- **A wildcard value containing `/`** (e.g. `sample=batch1/s1`) makes a live file look like an orphan. Such files are listed with an `(ambiguous)` marker and are never deleted unless you pass `--delete-ambiguous`; if they are live, pass `--permissive-wildcards` or constrain the wildcard.
 - **Files a tool writes but no rule declares** (`.bai`, `.tbi`, `.fai`, tool-written logs) are reported as orphans.
 - **Rules that only exist under a particular config** are invisible unless you pass that config with `--configfile`, and their outputs are then reported as orphans.
-- **A running workflow** has temporary and partial files on disk that match no pattern.
+- **A running workflow** has temporary and partial files on disk that match no pattern. Deletion is refused while the working directory's `.snakemake/locks` is non-empty, but a run started from a directory `snakeprune` does not know about is not detected.
 
 ### Built-in refusals
 
@@ -91,6 +96,8 @@ The guards below catch a wrong target or a broken workflow load. They cannot cat
 - **Results-dir / rule-prefix mismatch.** If no rule writes under the results directory's path relative to the workflow's working directory, nor under its basename (see below), every file would look like an orphan. `snakeprune` refuses and surfaces the prefixes the rules actually use. Override with `--allow-basename-mismatch`.
 - **Scanning the workflow directory itself.** If the scanned directory is the workflow's working directory, `--delete` / `--trash` is refused (exit 3) because the Snakefile, config and inputs would be listed as orphans; a dry run is still allowed. Override with `--allow-basename-mismatch`.
 - **Bad `--exclude-dir`.** Each value must be an existing, non-symlink directory strictly inside the results directory, spelled exactly as on disk (letter case and Unicode form matter, even on case-insensitive filesystems), and not reached through a symlinked parent directory. Otherwise `snakeprune` exits 3 before scanning (a typo would silently protect nothing).
+- **Workflow locked.** `--delete` / `--trash` is refused (exit 3) while `<working directory>/.snakemake/locks` contains anything, because a Snakemake run appears to be in progress. For stale locks left by a crashed run, clear them with `snakemake --unlock` or pass `--allow-locked`.
+- **Filesystem root.** `--delete` / `--trash` is refused outright when the scanned directory is `/`.
 - **Trash target blocked by a file.** `--trash DIR` is refused up front (exit 3) if the trash directory itself or any directory level between it and a target already exists as a non-directory, so nothing is moved before the failure.
 - **High orphan rate.** When more than `--orphan-rate-threshold` (default 0.5) of scanned files would be orphans, `snakeprune` prints a loud warning and — under `--delete` / `--trash` — refuses unless `--allow-high-orphan-rate` is also passed. Pass `--orphan-rate-threshold 1.0` to disable the check entirely.
 - **Naughty target directories.** Targeting a conventional Snakemake input/config directory (`resources`, `config`, `profile`, `workflow`, `.snakemake`) prints a warning, and — under `--delete` / `--trash` — refuses unless `--allow-naughty-dir` is passed. The check fires before the workflow is even loaded, and especially guards against pointing at `resources/` (downloaded reference data). Extend the list for a run with `--naughty-dir NAME` (repeatable). The directory's real name is used, so spelling the target as `.` or `..` does not avoid the check.
@@ -124,14 +131,15 @@ The guards below catch a wrong target or a broken workflow load. They cannot cat
 
 ### Limitations
 
-- **Nested results directories.** Scanned files are matched against rule patterns by the results directory's path relative to the workflow's working directory (the Snakefile's directory, or its parent for `workflow/Snakefile`), e.g. `results/qc/a.txt` for `path/to/results/qc`. A file is also live if it matches under the results directory's basename (e.g. `results/qc/a.txt` and `qc/a.txt` for the example above), because the workflow may have run in a different directory than the one snakeprune assumes (`workdir:` directive, `snakemake -d`). If the results directory is outside the working directory, only the basename is used. Scanning a sub-directory such as `results/qc` when the rules' literal prefix is shorter (e.g. `results/{d}/x.txt`) therefore trips the "No rule writes under" guard and needs `--allow-basename-mismatch`.
-- **Unconstrained wildcards are stricter than Snakemake's.** Snakemake lets an unconstrained `{wildcard}` match `.+`, which spans `/`. `snakeprune` deliberately uses `[^/]+` instead: with `.+`, a rule writing `results/{sample}/{replicate}/out.txt` would also claim `results/A/B/norm/out.txt`, hiding exactly the stale deeper layouts this tool exists to find. The cost is that a file Snakemake produced with a `/` inside a wildcard value (e.g. `sample=batch1/s1`) is reported as an orphan. If your workflow does that, pass `--permissive-wildcards`, or add a `wildcard_constraints` block so the two tools agree.
+- **Nested results directories.** Scanned files are matched against rule patterns by the results directory's path relative to the workflow's working directory e.g. `results/qc/a.txt` for `path/to/results/qc`. The working directory is, in order: `--directory DIR` (use it if you ran `snakemake -d DIR`), the Snakefile's own `workdir:` directive, then the Snakefile's directory (its parent for `workflow/Snakefile`). `snakeprune` cannot know the directory you actually ran `snakemake` from, so a file is also live if it matches under the results directory's basename (e.g. `results/qc/a.txt` and `qc/a.txt` for the example above). If the results directory is outside the working directory, only the basename is used. Scanning a sub-directory such as `results/qc` when the rules' literal prefix is shorter (e.g. `results/{d}/x.txt`) therefore trips the "No rule writes under" guard and needs `--allow-basename-mismatch`.
+- **Unconstrained wildcards are stricter than Snakemake's.** Snakemake lets an unconstrained `{wildcard}` match `.+`, which spans `/`. `snakeprune` deliberately uses `[^/]+` instead: with `.+`, a rule writing `results/{sample}/{replicate}/out.txt` would also claim `results/A/B/norm/out.txt`, hiding exactly the stale deeper layouts this tool exists to find. The cost is that a file Snakemake produced with a `/` inside a wildcard value (e.g. `sample=batch1/s1`) is reported as an orphan. `snakeprune` cannot tell that case from a stale deeper layout, so any orphan that *would* match a rule under `.+` is listed with a trailing `(ambiguous)` and is held back from `--delete` / `--trash`. Review those lines: if they are live, pass `--permissive-wildcards` or add a `wildcard_constraints` block so the two tools agree; if they are stale, pass `--delete-ambiguous` to remove them too. A wildcard with an explicit constraint is never ambiguous.
 - **Config-conditional rules.** If a rule is `include:`-d only under specific config values, pass the matching config with `--configfile path/to/config.yaml` (repeatable). Without it, the extractor sees an empty config and config-gated rules are absent — their outputs would then be reported as orphans.
 - **Function/callable paths fail loudly, never silently.** Snakemake itself rejects a rule whose `output:`, `log:` or `benchmark:` is a function or `lambda` at load time, so such a workflow never loads, and the extractor carries its own guard for the same case. `snakeprune` surfaces that as an error (exit 4) rather than guessing — it never turns an unrecognised path into a bogus orphan pattern.
 - **Symlinked subdirectories are never recursed.** `--follow-symlinks` covers symlinked *files* only. Files reachable only via a symlinked subdirectory are never scanned, with or without the flag. The CLI surfaces a one-line count of skipped symlinked subdirectories at the end of the walk so this is at least visible.
 - **Undeclared sidecar files are orphans.** Only paths a rule *declares* (`output`, `log`, `benchmark`) are live. Index and companion files that tools write alongside a declared output — `.bai`, `.csi`, `.tbi`, `.fai`, `.dict`, `Rplots.pdf`, `samtools sort` temporaries, `*.log` written by the tool rather than by `log:` — are reported as orphans. Declare them (`multiext`, `touch()`, an extra `output:` entry) or protect them with `--ignore "**/*.bai"` (which matches at any depth, including the top level).
 - **`directory()` outputs.** Everything beneath a `directory()` output is treated as live, because Snakemake owns the whole tree. `snakeprune` cannot see stale files *inside* such a directory.
-- **Do not run while the workflow is running.** In-flight jobs write temporary and partial files that match no pattern; wait for `snakemake` to finish (and for no `.snakemake/locks` to exist) before pruning.
+- **Do not run while the workflow is running.** In-flight jobs write temporary and partial files that match no pattern; wait for `snakemake` to finish before pruning. `snakeprune` refuses to delete while `.snakemake/locks` in the working directory is non-empty, but it only looks in the working directory it has worked out (see *Nested results directories*), so do not rely on that check alone.
+- **Unicode forms.** Rule paths, `--ignore` globs and file names are compared in NFC form, so a name stored decomposed on disk (older macOS, some network filesystems) still matches a rule written with composed characters.
 - **Module-imported rules** (`module foo: snakefile: ...; use rule * from foo`) are supported, including the `prefix:` directive. Less-common configurations (heavy `with: output:` overrides, deeply nested modules) are not specifically tested — review the orphan list before deleting.
 - **No multi-config awareness.** Pipelines that legitimately produce outputs under multiple configs (e.g. running with `sample_set=A` and later `sample_set=B`) need separate scans per config; `snakeprune` only sees one config at a time.
 
@@ -152,9 +160,9 @@ If `python` is not on `$PATH`, `snakeprune` exits with code 4 and a message aski
 2. Locate `python` on `$PATH` and run the bundled `_extract.py` script as a subprocess: `<python> .../_extract.py <pipeline_dir> [--configfile ...]`. The subprocess loads the workflow via `snakemake.api.SnakemakeApi`, walks `workflow.rules`, and emits `{"rules": [...]}` JSON on stdout.
 3. For each path a rule produces (`output`, `log`, and `benchmark`), parse `{wildcard}` and `{wildcard,regex}` placeholders exactly as Snakemake does — Snakemake has already inlined rule-local and global `wildcard_constraints` into each string, and the inline annotation wins; unconstrained wildcards default to `[^/]+` (or Snakemake's `.+` under `--permissive-wildcards`). `directory()` outputs additionally match everything beneath them. Rule paths are normalised first (`./`, `//`, trailing `/`, `seg/..`). The combined alternation regex is built once for the whole scan; patterns whose constraints use numeric backreferences are kept out of it and matched individually.
 4. Walk the `results/` tree, skipping symlinks by default (symlinked directories always), any `--exclude-dir` subtree, and any path matching an `--ignore` glob.
-5. For each regular file, prefix its path with the results directory's path relative to the workflow's working directory (and, separately, with the results directory's basename), then match against all compiled rule patterns. Files matching under neither prefix are orphans.
+5. For each regular file, prefix its path with the results directory's path relative to the workflow's working directory (and, separately, with the results directory's basename), then match against all compiled rule patterns. Files matching under neither prefix are orphans; an orphan that would match if unconstrained wildcards could span `/` is marked `(ambiguous)`.
 6. With `--rule-attribution`, report each orphan with the rule whose literal path prefix it most closely resembles.
-7. With `--delete` (or `--trash DIR`), prompt for confirmation, then either unlink each orphan one at a time or move it into `DIR/<results-dir-name>/<rel-path>` (regular files only; symlinks refused unless `--allow-symlinks`).
+7. With `--delete` (or `--trash DIR`), prompt for confirmation, then, leaving out `(ambiguous)` orphans unless `--delete-ambiguous` is passed, either unlink each orphan one at a time or move it into `DIR/<results-dir-name>/<rel-path>` (regular files only; symlinks refused unless `--allow-symlinks`).
 
 ## Licence
 

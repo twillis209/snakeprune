@@ -15,16 +15,20 @@ from snakeprune.patterns import (
     ExtractorError,
     PatternError,
     SnakefileNotFound,
+    build_rule_patterns,
     combine_rule_patterns,
-    find_rule_patterns,
+    extract_workflow,
+    resolve_snakefile,
     results_dir_name,
     results_match_prefix,
     rule_literal_prefixes,
 )
 from snakeprune.walker import (
     OrphanFile,
+    _compile_globs,
     attribute_orphan_to_rule,
     iter_results_files,
+    nfc,
 )
 
 PROGRESS_INTERVAL = 10000
@@ -210,6 +214,30 @@ def scan(
              "Default is the stricter `[^/]+`, which is what lets snakeprune "
              "detect files from older, differently-nested output layouts.",
     ),
+    delete_ambiguous: bool = typer.Option(
+        False,
+        "--delete-ambiguous",
+        help="Also delete orphans marked (ambiguous): files that match a rule "
+             "only if an unconstrained wildcard spans `/`. By default they "
+             "are listed but never deleted.",
+    ),
+    directory: Optional[Path] = typer.Option(
+        None,
+        "--directory",
+        "-d",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        help="Working directory the workflow runs in, as `snakemake -d`. "
+             "Default: the Snakefile's `workdir:` directive if it has one, "
+             "else the Snakefile's directory (its parent for workflow/Snakefile).",
+    ),
+    allow_locked: bool = typer.Option(
+        False,
+        "--allow-locked",
+        help="Bypass the delete/trash refusal when the working directory "
+             "holds Snakemake locks (use only for stale locks from a crashed run).",
+    ),
     limit: Optional[int] = typer.Option(None, "--limit", help="Stop after scanning N files (for benchmarking)."),
 ) -> None:
     """Scan a Snakemake project's results directory for orphan files."""
@@ -223,6 +251,14 @@ def scan(
             "Refusing to delete: --limit truncates the scan, so the orphan set "
             "would be partial and the orphan-rate guard meaningless. Drop "
             "--limit to delete, or drop --delete/--trash to benchmark.",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+
+    deleting = delete or trash is not None
+    if deleting and os.path.realpath(results_dir) == os.path.abspath(os.sep):
+        typer.echo(
+            "Refusing to delete: the scanned directory is the filesystem root.",
             err=True,
         )
         raise typer.Exit(code=3)
@@ -258,15 +294,42 @@ def scan(
             raise typer.Exit(code=3)
 
     try:
+        _compile_globs(ignore or ())
         exclude_dirs = _resolve_exclude_dirs(results_dir, exclude_dir or ())
-    except ExcludeDirError as exc:
+    except (ExcludeDirError, ValueError) as exc:
         typer.echo(f"Refusing to scan: {exc}", err=True)
         raise typer.Exit(code=3)
 
     log(f"Loading Snakemake workflow from {pipeline_dir}...")
+    wildcard_regex = (
+        SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
+    )
+    permissive_patterns = None
     try:
-        match_prefix = results_match_prefix(pipeline_dir, results_dir)
-        if match_prefix == "" and (delete or trash is not None) and not allow_basename_mismatch:
+        resolve_snakefile(pipeline_dir)
+        extracted = extract_workflow(
+            pipeline_dir, configfiles=tuple(configfile or ()), directory=directory
+        )
+        workdir = extracted.workdir
+        if extracted.workdir_source == "directive":
+            log(f"Workflow sets `workdir: {workdir}`; rule paths are read relative to it.")
+        locks_dir = workdir / ".snakemake" / "locks"
+        if deleting and not allow_locked and locks_dir.is_dir() and any(locks_dir.iterdir()):
+            typer.echo(
+                f"Refusing to delete: `{locks_dir}` is not empty, so a "
+                f"Snakemake run appears to be in progress and its partial "
+                f"files would be listed as orphans. Wait for it to finish; "
+                f"if the locks are stale (a crashed run), clear them with "
+                f"`snakemake --unlock` or pass --allow-locked.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
+        match_prefix = results_match_prefix(
+            pipeline_dir,
+            results_dir,
+            workdir=None if extracted.workdir_source == "default" else workdir,
+        )
+        if match_prefix == "" and deleting and not allow_basename_mismatch:
             typer.echo(
                 "Refusing to delete: the scanned directory is the workflow's "
                 "working directory, so the Snakefile, config and inputs would "
@@ -275,16 +338,24 @@ def scan(
                 err=True,
             )
             raise typer.Exit(code=3)
-        patterns = find_rule_patterns(
-            pipeline_dir,
-            configfiles=tuple(configfile or ()),
-            default_wildcard_regex=(
-                SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
-            ),
+        patterns = build_rule_patterns(
+            extracted.rules,
+            workdir,
+            default_wildcard_regex=wildcard_regex,
             on_warning=lambda msg: typer.echo(msg, err=True),
             results_dir=results_dir,
             match_prefix=match_prefix,
         )
+        if not permissive_wildcards:
+            # Same rules with Snakemake's own `.+`: an orphan that matches
+            # these may be a live output whose wildcard value contains `/`.
+            permissive_patterns = build_rule_patterns(
+                extracted.rules,
+                workdir,
+                default_wildcard_regex=SNAKEMAKE_WILDCARD_REGEX,
+                results_dir=results_dir,
+                match_prefix=match_prefix,
+            )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2)
@@ -326,6 +397,7 @@ def scan(
             raise typer.Exit(code=3)
     try:
         combined = combine_rule_patterns(patterns)
+        permissive = combine_rule_patterns(permissive_patterns or [])
     except PatternError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=4)
@@ -349,16 +421,21 @@ def scan(
         file_count += 1
         if file_count % PROGRESS_INTERVAL == 0:
             log(f"  scanned {file_count} files...")
-        targets = [tp + rel for tp in target_prefixes]
+        # Rule paths are NFC-normalised; some filesystems store names decomposed.
+        norm_rel = nfc(rel)
+        targets = [tp + norm_rel for tp in target_prefixes]
         if combined is not None and any(combined.match(t) for t in targets):
             continue
+        ambiguous = permissive is not None and any(permissive.match(t) for t in targets)
         likely = None
         if rule_attribution:
             for t in targets:
                 likely = attribute_orphan_to_rule(t, patterns, prefixes)
                 if likely:
                     break
-        orphans.append(OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely))
+        orphans.append(
+            OrphanFile(path=Path(full_path), rel=rel, likely_rule=likely, ambiguous=ambiguous)
+        )
     log(f"Scanned {file_count} file(s); found {len(orphans)} orphan(s).")
 
     skipped_dirs = walk_stats.get("skipped_symlinked_dirs", 0)
@@ -395,9 +472,31 @@ def scan(
         line = str(orphan.path)
         if rule_attribution and orphan.likely_rule:
             line += f"\t(likely: {orphan.likely_rule})"
+        if orphan.ambiguous:
+            line += "\t(ambiguous)"
         typer.echo(line)
 
-    deletion_requested = delete or trash is not None
+    n_ambiguous = sum(o.ambiguous for o in orphans)
+    if n_ambiguous:
+        fate = (
+            "They will be deleted because --delete-ambiguous was passed."
+            if delete_ambiguous
+            else "They are never deleted unless you pass --delete-ambiguous."
+        )
+        typer.echo(
+            f"{n_ambiguous} orphan(s) are marked (ambiguous): each matches a "
+            f"rule if an unconstrained wildcard is allowed to span `/`, as "
+            f"Snakemake itself allows, so it may be a live output. {fate} If "
+            f"they are live, pass --permissive-wildcards or constrain the "
+            f"wildcard.",
+            err=True,
+        )
+
+    deletion_requested = deleting
+    if not delete_ambiguous:
+        # The listing and the orphan rate above cover every orphan; only the
+        # unambiguous ones go on to deletion.
+        orphans = [o for o in orphans if not o.ambiguous]
     if deletion_requested and orphans:
         total_bytes = 0
         for o in orphans:

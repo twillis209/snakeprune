@@ -853,7 +853,7 @@ def test_cli_scan_unparseable_pattern_exits_4(make_pipeline, make_results, monke
     # If the extractor ever hands back a brace sequence the parser does not
     # understand, the scan must stop with exit 4 — never escape it into a
     # literal that flags every file of the rule as an orphan.
-    from snakeprune.patterns import RuleSpec
+    from snakeprune.patterns import ExtractedWorkflow, RuleSpec
     pipeline = make_pipeline(
         "rule a:\n"
         "    output: 'results/{n}.txt'\n"
@@ -861,8 +861,11 @@ def test_cli_scan_unparseable_pattern_exits_4(make_pipeline, make_results, monke
     )
     results = make_results(["1.txt"])
     monkeypatch.setattr(
-        "snakeprune.patterns.load_rule_specs",
-        lambda *a, **k: [RuleSpec(name="a", outputs=["results/{bad name}.txt"], constraints={})],
+        "snakeprune.cli.extract_workflow",
+        lambda *a, **k: ExtractedWorkflow(
+            rules=[RuleSpec(name="a", outputs=["results/{bad name}.txt"], constraints={})],
+            workdir=pipeline,
+        ),
     )
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 4
@@ -1590,3 +1593,231 @@ def test_cli_scan_trash_inside_results_via_other_letter_case_refuses(
     assert result.exit_code == 3, result.output
     assert "--trash" in result.output
     assert (results / "orphan.csv").exists()
+
+
+_ONE_RULE = (
+    "rule a:\n"
+    "    output: 'results/{n}.txt'\n"
+    "    shell: 'touch {output}'\n"
+)
+_LIVE = ["1.txt", "2.txt", "3.txt", "4.txt", "5.txt"]
+
+
+def test_cli_scan_ambiguous_orphan_is_listed_but_not_deleted(make_pipeline, make_results):
+    # results/sub/6.txt matches `results/{n}.txt` if {n} may span `/`, as
+    # Snakemake allows, so it may be live: it is flagged and held back.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/6.txt", "junk.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert f"{results / 'sub' / '6.txt'}\t(ambiguous)" in result.stdout
+    assert "--delete-ambiguous" in result.stderr
+    assert "About to delete 1 file(s)" in result.stderr
+    assert (results / "sub" / "6.txt").exists()
+    assert not (results / "junk.csv").exists()
+    assert "(ambiguous)" not in [l for l in result.stdout.splitlines() if "junk.csv" in l][0]
+
+
+def test_cli_scan_only_ambiguous_orphans_deletes_nothing(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/6.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "About to delete" not in result.stderr
+    assert (results / "sub" / "6.txt").exists()
+
+
+def test_cli_scan_delete_ambiguous_flag_deletes_them(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/6.txt", "junk.csv"])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--delete", "--yes", "--delete-ambiguous"]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (results / "sub" / "6.txt").exists()
+    assert not (results / "junk.csv").exists()
+
+
+def test_cli_scan_ambiguous_orphan_is_held_back_from_trash(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["sub/6.txt", "junk.csv"])
+    trash = tmp_path / "trash"
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert (results / "sub" / "6.txt").exists()
+    assert (trash / "results" / "junk.csv").exists()
+
+
+def test_cli_scan_constrained_wildcard_orphan_is_not_ambiguous(make_pipeline, make_results):
+    # An explicit constraint is the user's own statement that `/` is excluded.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n,[0-9]+}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(_LIVE + ["sub/6.txt"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "(ambiguous)" not in result.stdout
+    assert not (results / "sub" / "6.txt").exists()
+
+
+def test_cli_scan_delete_refuses_while_snakemake_locks_exist(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    locks = pipeline / ".snakemake" / "locks"
+    locks.mkdir(parents=True)
+    (locks / "0.output.lock").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3, result.output
+    assert "--allow-locked" in result.stderr
+    assert (results / "junk.csv").exists()
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 0
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--delete", "--yes", "--allow-locked"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert not (results / "junk.csv").exists()
+
+
+def test_cli_scan_empty_locks_directory_does_not_block(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    (pipeline / ".snakemake" / "locks").mkdir(parents=True)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert not (results / "junk.csv").exists()
+
+
+def test_cli_scan_delete_refuses_filesystem_root(make_pipeline):
+    pipeline = make_pipeline(_ONE_RULE)
+    result = runner.invoke(app, ["scan", str(pipeline), os.sep, "--delete"])
+    assert result.exit_code == 3, result.output
+    assert "filesystem root" in result.stderr
+
+
+def _nested_layout(tmp_path):
+    final = tmp_path / "deep" / "run" / "out" / "final"
+    final.mkdir(parents=True)
+    for name in _LIVE + ["junk.csv"]:
+        (final / name).touch()
+    return tmp_path / "deep" / "run", final
+
+
+def test_cli_scan_honours_workdir_directive_for_nested_results(make_pipeline, tmp_path):
+    run, final = _nested_layout(tmp_path)
+    pipeline = make_pipeline(
+        f"workdir: {str(run)!r}\n"
+        "rule a:\n"
+        "    output: 'out/final/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(final)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(final / "junk.csv")]
+
+
+def test_cli_scan_workdir_directive_resolves_leading_dotdot(make_pipeline, tmp_path):
+    run, _ = _nested_layout(tmp_path)
+    store = tmp_path / "deep" / "store"
+    store.mkdir()
+    for name in _LIVE + ["junk.csv"]:
+        (store / name).touch()
+    pipeline = make_pipeline(
+        f"workdir: {str(run)!r}\n"
+        "rule a:\n"
+        "    output: '../store/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(store)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(store / "junk.csv")]
+
+
+def test_cli_scan_workdir_directive_is_not_created(make_pipeline, make_results, tmp_path):
+    missing = tmp_path / "never" / "made"
+    pipeline = make_pipeline(f"workdir: {str(missing)!r}\n" + _ONE_RULE)
+    results = make_results(_LIVE)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert not missing.exists()
+    assert result.stdout == ""
+
+
+def test_cli_scan_directory_option_sets_workdir(make_pipeline, tmp_path):
+    run, final = _nested_layout(tmp_path)
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'out/final/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    refused = runner.invoke(app, ["scan", str(pipeline), str(final)])
+    assert refused.exit_code == 3
+    result = runner.invoke(app, ["scan", str(pipeline), str(final), "-d", str(run)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(final / "junk.csv")]
+
+
+def test_cli_scan_locks_are_checked_in_the_directory_option_workdir(make_pipeline, tmp_path):
+    run, final = _nested_layout(tmp_path)
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'out/final/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    locks = run / ".snakemake" / "locks"
+    locks.mkdir(parents=True)
+    (locks / "0.input.lock").touch()
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(final), "-d", str(run), "--delete", "--yes"]
+    )
+    assert result.exit_code == 3, result.output
+    assert (final / "junk.csv").exists()
+
+
+def test_cli_scan_matches_decomposed_unicode_names_on_disk(make_pipeline, tmp_path):
+    # Rule text is composed (NFC); the directory on disk is decomposed (NFD),
+    # as older macOS and some network filesystems store it.
+    import unicodedata
+
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/caf\u00e9/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    sub = tmp_path / "results" / unicodedata.normalize("NFD", "caf\u00e9")
+    sub.mkdir(parents=True)
+    for name in _LIVE:
+        (sub / name).touch()
+    (tmp_path / "results" / "junk.csv").touch()
+    result = runner.invoke(app, ["scan", str(pipeline), str(tmp_path / "results")])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(tmp_path / "results" / "junk.csv")]
+
+
+def test_cli_scan_ignore_glob_matches_decomposed_unicode_names(make_pipeline, tmp_path):
+    import unicodedata
+
+    pipeline = make_pipeline(_ONE_RULE)
+    results = tmp_path / "results"
+    sub = results / unicodedata.normalize("NFD", "caf\u00e9")
+    sub.mkdir(parents=True)
+    (sub / "notes.md").touch()
+    for name in _LIVE:
+        (results / name).touch()
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--ignore", "caf\u00e9/**"]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+
+
+def test_cli_scan_ignore_glob_with_too_many_double_stars_refuses(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE)
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--ignore", "**/a/**/b/**/c/**/d"]
+    )
+    assert result.exit_code == 3, result.output
+    assert "--ignore" in result.stderr

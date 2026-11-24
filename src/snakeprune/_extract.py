@@ -1,16 +1,22 @@
 """Standalone rule extractor for snakeprune.
 
 This script is invoked as a subprocess by snakeprune's CLI:
-    python _extract.py <pipeline_dir> [--configfile PATH ...]
+    python _extract.py <pipeline_dir> [--configfile PATH ...] [--directory DIR]
 
 It loads the Snakemake workflow at <pipeline_dir>, iterates over each path a
 rule produces (output, log, benchmark), and emits the result as a JSON document
 on stdout:
 
-    {"rules": [{"name": str,
+    {"workdir": str,                        # directory rule paths are relative to
+     "workdir_source": str,                 # "default" | "directive" | "option"
+     "rules": [{"name": str,
                 "outputs": list[str],       # raw path strings, inline {name,regex} kept
                 "directories": list[str],   # subset of outputs flagged directory()
                 "constraints": dict[str, str]}, ...]}
+
+The working directory is, in order of precedence: `--directory` (as with
+`snakemake -d`), the Snakefile's own `workdir:` directive, then the default
+described in `_resolve_workdir`.
 
 Paths are emitted exactly as Snakemake stores them: Snakemake has already
 inlined rule-level and global wildcard_constraints into each string as
@@ -77,8 +83,25 @@ def _relativise(path: str, workdir: Path) -> str:
     return path
 
 
-def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> dict:
+def _load_workflow(
+    snakefile: Path, workdir: Path, configfiles: list[Path], source: str = "default"
+) -> dict:
     from snakemake.api import SnakemakeApi
+    from snakemake.workflow import Workflow
+
+    # The workflow is loaded with an explicit workdir, which makes Snakemake
+    # ignore a `workdir:` directive. Record the directive's value so the
+    # paths can still be interpreted relative to it; nothing is created or
+    # chdir'd into. A relative value resolves against the assumed workdir,
+    # which is the process's cwd while the Snakefile is parsed.
+    directives: list[str] = []
+    original_workdir = Workflow.workdir
+
+    def _record_workdir(self, value):
+        directives.append(os.path.abspath(str(value)))
+        return original_workdir(self, value)
+
+    Workflow.workdir = _record_workdir
     from snakemake.io import is_callable, is_flagged
     from snakemake.settings.enums import Quietness
     from snakemake.settings.types import (
@@ -102,6 +125,8 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
         global_constraints = dict(
             getattr(workflow, "wildcard_constraints", {}) or {}
         )
+        if source == "default" and directives:
+            workdir, source = Path(directives[-1]), "directive"
         rules_out: list[dict] = []
         for rule in workflow.rules:
             produced = list(rule.output) + list(rule.log)
@@ -130,11 +155,21 @@ def _load_workflow(snakefile: Path, workdir: Path, configfiles: list[Path]) -> d
                     "constraints": {**global_constraints, **rule_constraints},
                 }
             )
-        return {"rules": rules_out}
+        return {
+            "workdir": os.path.abspath(workdir),
+            "workdir_source": source,
+            "rules": rules_out,
+        }
 
 
-def extract(pipeline_dir: Path, configfiles: list[Path]) -> dict:
+def extract(
+    pipeline_dir: Path, configfiles: list[Path], directory: Path | None = None
+) -> dict:
     snakefile = _resolve_snakefile(pipeline_dir)
+    if directory is not None:
+        if not directory.is_dir():
+            raise FileNotFoundError(f"--directory {directory} is not a directory")
+        return _load_workflow(snakefile, directory.resolve(), configfiles, "option")
     return _load_workflow(
         snakefile=snakefile,
         workdir=_resolve_workdir(snakefile),
@@ -160,10 +195,16 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Snakemake configfile; repeatable.",
     )
+    parser.add_argument(
+        "--directory",
+        type=Path,
+        default=None,
+        help="Working directory the workflow runs in (as `snakemake -d`).",
+    )
     args = parser.parse_args(argv)
 
     try:
-        result = extract(args.pipeline_dir, args.configfile)
+        result = extract(args.pipeline_dir, args.configfile, args.directory)
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2

@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **204 tests**, split across four files:
+As of this writing the suite is **223 tests**, split across four files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
-- `tests/test_walker.py` (21) — does it find the right files on disk?
+- `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (18) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (83) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (99) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 
 Run them all with `python -m pytest` from the project root. They use a real
@@ -131,6 +131,35 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
   results-dir basename, so a `workdir:` directive the extractor cannot see does
   not orphan relative outputs
   (`test_cli_scan_workdir_directive_with_absolute_rule_keeps_relative_outputs`).
+- An orphan that matches a rule only if an unconstrained wildcard spans `/` is
+  listed as `(ambiguous)` and held back from `--delete` and `--trash` unless
+  `--delete-ambiguous` is passed; an explicitly constrained wildcard is never
+  ambiguous (`test_cli_scan_ambiguous_orphan_is_listed_but_not_deleted`,
+  `test_cli_scan_only_ambiguous_orphans_deletes_nothing`,
+  `test_cli_scan_delete_ambiguous_flag_deletes_them`,
+  `test_cli_scan_ambiguous_orphan_is_held_back_from_trash`,
+  `test_cli_scan_constrained_wildcard_orphan_is_not_ambiguous`).
+- Deletion is refused while `.snakemake/locks` in the working directory is
+  non-empty, unless `--allow-locked`; an empty locks directory does not block
+  (`test_cli_scan_delete_refuses_while_snakemake_locks_exist`,
+  `test_cli_scan_empty_locks_directory_does_not_block`,
+  `test_cli_scan_locks_are_checked_in_the_directory_option_workdir`).
+- Deletion is refused for the filesystem root
+  (`test_cli_scan_delete_refuses_filesystem_root`).
+- A `workdir:` directive is read (never created or entered) and `--directory`
+  overrides it; nested results directories and leading `..` paths resolve
+  against it (`test_cli_scan_honours_workdir_directive_for_nested_results`,
+  `test_cli_scan_workdir_directive_resolves_leading_dotdot`,
+  `test_cli_scan_workdir_directive_is_not_created`,
+  `test_cli_scan_directory_option_sets_workdir`).
+- Names stored decomposed on disk match composed rule text and `--ignore` globs
+  (`test_cli_scan_matches_decomposed_unicode_names_on_disk`,
+  `test_cli_scan_ignore_glob_matches_decomposed_unicode_names`).
+- `--ignore` globs compile to one regex; repeated `**/` collapse and more than
+  three separate `**/` are refused
+  (`test_ignore_glob_repeated_double_stars_collapse`,
+  `test_ignore_glob_with_too_many_double_stars_is_rejected`,
+  `test_cli_scan_ignore_glob_with_too_many_double_stars_refuses`).
 - `--exclude-dir` must match the on-disk spelling, so `KEEP` for `keep/` is
   refused instead of silently protecting nothing
   (`test_cli_exclude_dir_wrong_case_refuses`).

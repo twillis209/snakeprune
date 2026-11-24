@@ -146,3 +146,21 @@ def test_iter_results_files_counts_skipped_symlinked_dirs_when_following(make_re
     assert stats["skipped_symlinked_dirs"] == 1
     assert "link_file" in rels
     assert not any(r == "big" or r.startswith("big/") for r in rels)
+
+
+def test_ignore_glob_repeated_double_stars_collapse():
+    # Previously expanded into 2**n variants and hung.
+    glob = "**/" * 60 + "b.txt"
+    assert _matches_any_glob("a/x/b.txt", [glob]) is True
+    assert _matches_any_glob("a/x/c.txt", [glob]) is False
+
+
+def test_ignore_glob_with_too_many_double_stars_is_rejected():
+    assert _matches_any_glob("a/b/c/d.txt", ["**/b/**/c/**/d.txt"]) is True
+    with pytest.raises(ValueError, match="more than 3"):
+        _matches_any_glob("a/b/c/d/e.txt", ["**/b/**/c/**/d/**/e.txt"])
+
+
+def test_ignore_glob_subdir_suffix_matches_the_prefix_itself():
+    assert _matches_any_glob("sub", ["sub/**"]) is True
+    assert _matches_any_glob("subway/x", ["sub/**"]) is False

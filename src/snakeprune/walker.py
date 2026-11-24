@@ -1,39 +1,57 @@
 """Walk a results directory and apply ignore/symlink filters."""
 from __future__ import annotations
 
-import itertools
+import fnmatch
 import os
-from fnmatch import fnmatchcase
+import re
+import unicodedata
 from pathlib import Path
 from typing import Iterable, Iterator
 
 
-def _expand_globs(globs: Iterable[str]) -> tuple[str, ...]:
-    """Each glob plus every variant with one or more ``**/`` occurrences removed,
-    so that ``**/`` also matches zero directories (``**/*.bai`` -> ``*.bai``)."""
-    out: dict[str, None] = {}
-    for g in globs:
-        parts = g.split("**/")
-        # Each separator between parts is either kept ("**/") or dropped ("").
-        for keep in itertools.product(("**/", ""), repeat=len(parts) - 1):
-            out[parts[0] + "".join(k + p for k, p in zip(keep, parts[1:]))] = None
-    return tuple(out)
+def nfc(text: str) -> str:
+    """Unicode NFC form of ``text`` (some filesystems store names decomposed)."""
+    return text if text.isascii() else unicodedata.normalize("NFC", text)
 
 
-def _matches_expanded(rel_path: str, expanded: Iterable[str]) -> bool:
-    return any(fnmatchcase(rel_path, g) or _glob_matches_subdir(rel_path, g) for g in expanded)
+# Each `**/` multiplies the regex's worst-case backtracking by the path depth.
+MAX_DOUBLE_STARS = 3
+
+
+def _glob_regex(glob: str) -> str:
+    """Regex for one glob: ``fnmatch`` rules (``*`` crosses ``/``), except
+    that ``**/`` also matches zero directories (``**/*.bai`` covers ``x.bai``)."""
+    parts = (re.sub(r"\\[Zz]$", "", fnmatch.translate(p)) for p in glob.split("**/"))
+    return "(?s:.*/)?".join(parts)
+
+
+def _compile_globs(globs: Iterable[str]) -> re.Pattern | None:
+    """One regex matching any of ``globs``, or None if there are none.
+
+    A glob ending in ``/**`` also matches its prefix itself. Globs are
+    normalised to NFC; match them against NFC paths. Raises ``ValueError``
+    for a glob with more than ``MAX_DOUBLE_STARS`` separate ``**/``.
+    """
+    alternatives: list[str] = []
+    for glob in globs:
+        # `**/**/` means the same as `**/`.
+        glob = re.sub(r"(?:\*\*/){2,}", "**/", nfc(glob))
+        if glob.count("**/") > MAX_DOUBLE_STARS:
+            raise ValueError(
+                f"--ignore glob `{glob}` uses `**/` more than "
+                f"{MAX_DOUBLE_STARS} times, which would make matching very slow"
+            )
+        alternatives.append(_glob_regex(glob))
+        if glob.endswith("/**"):
+            alternatives.append(_glob_regex(glob[: -len("/**")]))
+    if not alternatives:
+        return None
+    return re.compile("|".join(f"(?:{a})" for a in alternatives))
 
 
 def _matches_any_glob(rel_path: str, globs: Iterable[str]) -> bool:
-    return _matches_expanded(rel_path, _expand_globs(globs))
-
-
-def _glob_matches_subdir(rel_path: str, glob: str) -> bool:
-    # Treat 'sub/**' as matching anything under 'sub/'
-    if glob.endswith("/**"):
-        prefix = glob[: -len("/**")]
-        return rel_path == prefix or rel_path.startswith(prefix + "/")
-    return False
+    compiled = _compile_globs(globs)
+    return compiled is not None and compiled.fullmatch(nfc(rel_path)) is not None
 
 
 def iter_results_files(
@@ -68,7 +86,7 @@ def iter_results_files(
     ``stats["excluded_dirs"] = 0`` and increments it once per directory
     pruned by ``exclude_dirs``.
     """
-    ignore_globs = _expand_globs(ignore_globs)
+    ignore_re = _compile_globs(ignore_globs)
     exclude_set = {os.path.abspath(p) for p in exclude_dirs}
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
@@ -124,13 +142,12 @@ def iter_results_files(
                 rel = full_path[base_len:]
                 if needs_sep_swap:
                     rel = rel.replace(sep, "/")
-                if ignore_globs and _matches_expanded(rel, ignore_globs):
+                if ignore_re is not None and ignore_re.fullmatch(nfc(rel)):
                     continue
                 yield full_path, rel
 
 
 from dataclasses import dataclass
-import re
 
 from snakeprune.patterns import extract_literal_prefix
 
@@ -140,6 +157,8 @@ class OrphanFile:
     path: Path
     rel: str
     likely_rule: str | None = None
+    # Matches a rule only if an unconstrained wildcard may span `/`.
+    ambiguous: bool = False
 
 
 def attribute_orphan_to_rule(

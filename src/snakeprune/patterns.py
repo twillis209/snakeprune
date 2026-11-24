@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import unicodedata
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -194,6 +195,20 @@ def _extract_script_path() -> Path:
     return Path(__file__).parent / "_extract.py"
 
 
+@dataclass(frozen=True)
+class ExtractedWorkflow:
+    """Rule specs plus the working directory their paths are relative to.
+
+    ``workdir_source`` says where the workdir came from: ``"default"`` (the
+    Snakefile's directory, or its parent for ``workflow/Snakefile``),
+    ``"directive"`` (the Snakefile's ``workdir:``) or ``"option"``
+    (``--directory``).
+    """
+    rules: list[RuleSpec]
+    workdir: Path
+    workdir_source: str = "default"
+
+
 def load_rule_specs(
     pipeline_dir: Path,
     configfiles: Sequence[Path] = (),
@@ -213,7 +228,26 @@ def run_extractor(
     _python_exe_for_testing: Path | None = None,
     _script_path_for_testing: Path | None = None,
 ) -> list[RuleSpec]:
-    """Invoke the standalone extractor in a subprocess and return RuleSpec objects.
+    """Invoke the extractor and return only its RuleSpec objects."""
+    return extract_workflow(
+        pipeline_dir,
+        configfiles=configfiles,
+        _python_exe_for_testing=_python_exe_for_testing,
+        _script_path_for_testing=_script_path_for_testing,
+    ).rules
+
+
+def extract_workflow(
+    pipeline_dir: Path,
+    configfiles: Sequence[Path] = (),
+    directory: Path | None = None,
+    *,
+    _python_exe_for_testing: Path | None = None,
+    _script_path_for_testing: Path | None = None,
+) -> ExtractedWorkflow:
+    """Invoke the standalone extractor in a subprocess.
+
+    ``directory`` overrides the working directory, as ``snakemake -d`` does.
 
     The two `_*_for_testing` kwargs are private test seams. They override
     the `python` discovery and the script-path resolution respectively, so
@@ -241,6 +275,8 @@ def run_extractor(
     cmd: list[str] = [str(python_exe), str(script_path), str(pipeline_dir)]
     for cf in configfiles:
         cmd.extend(["--configfile", str(cf)])
+    if directory is not None:
+        cmd.extend(["--directory", str(directory)])
 
     result = subprocess.run(
         cmd,
@@ -269,7 +305,7 @@ def run_extractor(
             f"stderr was:\n{result.stderr.strip()}"
         ) from exc
 
-    return [
+    rules = [
         RuleSpec(
             name=r["name"],
             outputs=list(r["outputs"]),
@@ -278,6 +314,12 @@ def run_extractor(
         )
         for r in payload["rules"]
     ]
+    workdir = payload.get("workdir")
+    return ExtractedWorkflow(
+        rules=rules,
+        workdir=Path(workdir) if workdir else resolve_workdir(pipeline_dir),
+        workdir_source=payload.get("workdir_source", "default"),
+    )
 
 
 def results_dir_name(results_dir: Path) -> str:
@@ -293,18 +335,26 @@ def results_dir_name(results_dir: Path) -> str:
     return name
 
 
-def results_match_prefix(pipeline_dir: Path, results_dir: Path) -> str:
+def results_match_prefix(
+    pipeline_dir: Path, results_dir: Path, workdir: Path | None = None
+) -> str:
     """Prefix under which scanned files are matched against rule patterns.
 
     The results dir's path relative to the workflow workdir, plus `/` (empty
     if they are the same directory). Both `abspath` and `realpath` forms of
     each directory are paired, so symlinks on either side still match. Falls
     back to `<results_dir.name>/` when the results dir is not under the workdir.
+
+    `workdir` overrides the default workdir (a `workdir:` directive or
+    `--directory`).
     """
-    snakefile_dir = resolve_snakefile(pipeline_dir).parent
-    workdirs = [resolve_workdir(pipeline_dir)]
-    unresolved = snakefile_dir.parent if snakefile_dir.name == "workflow" else snakefile_dir
-    workdirs.append(Path(os.path.abspath(unresolved)))
+    if workdir is not None:
+        workdirs = [Path(os.path.realpath(workdir)), Path(os.path.abspath(workdir))]
+    else:
+        snakefile_dir = resolve_snakefile(pipeline_dir).parent
+        workdirs = [resolve_workdir(pipeline_dir)]
+        unresolved = snakefile_dir.parent if snakefile_dir.name == "workflow" else snakefile_dir
+        workdirs.append(Path(os.path.abspath(unresolved)))
     results = [Path(os.path.abspath(results_dir)), Path(os.path.realpath(results_dir))]
     for wd in workdirs:
         for rd in results:
@@ -367,15 +417,40 @@ def find_rule_patterns(
     # Pre-check: surface SnakefileNotFound before spawning the extractor
     # subprocess, so a missing Snakefile exits 2 (not 4 via ExtractorError).
     resolve_snakefile(pipeline_dir)
+    return build_rule_patterns(
+        load_rule_specs(pipeline_dir, configfiles=configfiles),
+        resolve_workdir(pipeline_dir),
+        default_wildcard_regex=default_wildcard_regex,
+        on_warning=on_warning,
+        results_dir=results_dir,
+        match_prefix=match_prefix,
+    )
+
+
+def build_rule_patterns(
+    specs: Sequence[RuleSpec],
+    workdir: Path,
+    default_wildcard_regex: str = DEFAULT_WILDCARD_REGEX,
+    on_warning: Callable[[str], None] | None = None,
+    results_dir: Path | None = None,
+    match_prefix: str | None = None,
+) -> list[tuple[str, re.Pattern]]:
+    """Compile already-extracted rule specs; see `find_rule_patterns`.
+
+    `workdir` is the directory the specs' relative paths are relative to; a
+    leading `..` is resolved against it. Literal path text is normalised to
+    Unicode NFC, so compare against NFC-normalised file paths.
+    """
     out: list[tuple[str, re.Pattern]] = []
-    for spec in load_rule_specs(pipeline_dir, configfiles=configfiles):
+    for spec in specs:
         for output_str in spec.outputs:
             is_directory = output_str in spec.directories
             raw_path = output_str
+            output_str = unicodedata.normalize("NFC", output_str)
             output_str, dotdot = normalise_rule_path(output_str)
             if dotdot and output_str.startswith("../"):
                 output_str, dotdot = normalise_rule_path(
-                    str(resolve_workdir(pipeline_dir)) + "/" + output_str
+                    str(workdir) + "/" + output_str
                 )
             if dotdot:
                 raise PatternError(
