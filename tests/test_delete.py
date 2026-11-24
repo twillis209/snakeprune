@@ -1,4 +1,5 @@
 import pytest
+import shutil
 from pathlib import Path
 
 from snakeprune.delete import DeletionFailed, delete_orphans
@@ -368,3 +369,78 @@ def test_delete_orphans_reiterable_deletes_all(tmp_path):
     delete_orphans(items)
     assert not any(f.exists() for f in files)
     assert items.passes >= 2  # validated in full, then acted on
+
+
+class _FlakyOrphans:
+    """Re-iterable orphan list whose read-back fails on a chosen pass."""
+
+    def __init__(self, orphans, fail_pass, fail_after):
+        self._orphans = orphans
+        self._fail_pass = fail_pass
+        self._fail_after = fail_after
+        self.passes = 0
+
+    def __iter__(self):
+        self.passes += 1
+        this_pass = self.passes
+        for i, o in enumerate(self._orphans):
+            if this_pass == self._fail_pass and i == self._fail_after:
+                raise OSError("orphan spool is truncated")
+            yield o
+
+
+def test_delete_orphans_read_failure_mid_action_reports_progress(tmp_path):
+    # The deletion list is read back from disk while files are being removed;
+    # a read failure then is a mid-batch failure (some files gone), not a
+    # validation failure, and must say how many were removed.
+    files = [tmp_path / f"{n}.txt" for n in "abc"]
+    for f in files:
+        f.write_text("x")
+    orphans = _FlakyOrphans(
+        [OrphanFile(path=f, rel=f.name) for f in files], fail_pass=2, fail_after=1
+    )
+    with pytest.raises(DeletionFailed) as exc:
+        delete_orphans(orphans)
+    assert exc.value.completed == 1
+    assert "1 of 3" in str(exc.value)
+    assert not files[0].exists()
+    assert files[1].exists() and files[2].exists()
+
+
+def test_delete_orphans_read_failure_during_validation_is_plain_oserror(tmp_path):
+    files = [tmp_path / f"{n}.txt" for n in "ab"]
+    for f in files:
+        f.write_text("x")
+    orphans = _FlakyOrphans(
+        [OrphanFile(path=f, rel=f.name) for f in files], fail_pass=1, fail_after=1
+    )
+    with pytest.raises(OSError) as exc:
+        delete_orphans(orphans)
+    assert not isinstance(exc.value, DeletionFailed)
+    assert all(f.exists() for f in files)
+
+
+def test_delete_orphans_trash_failure_message_says_moved(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    src.mkdir()
+    a, b = src / "a.txt", src / "b.txt"
+    a.write_text("a")
+    b.write_text("b")
+    real_move = shutil.move
+
+    def flaky_move(s, d, *args, **kwargs):
+        if str(s) == str(b):
+            raise OSError("disk full")
+        return real_move(s, d, *args, **kwargs)
+
+    monkeypatch.setattr("snakeprune.delete.shutil.move", flaky_move)
+    with pytest.raises(DeletionFailed) as exc:
+        delete_orphans(
+            [OrphanFile(path=a, rel="a.txt"), OrphanFile(path=b, rel="b.txt")],
+            trash_dir=tmp_path / "trash",
+            results_dir_name="src",
+        )
+    msg = str(exc.value)
+    assert "Moved 1 of 2" in msg
+    assert "moving to trash:" in msg
+    assert "Deleted" not in msg

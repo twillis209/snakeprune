@@ -18,14 +18,29 @@ class DeletionFailed(RuntimeError):
     is already gone.
     """
 
-    def __init__(self, completed: int, total: int, path: Path, cause: OSError):
+    def __init__(
+        self,
+        completed: int,
+        total: int,
+        path: Path | None,
+        cause: OSError,
+        trash: bool = False,
+    ):
         self.completed = completed
         self.total = total
         self.path = path
+        done = "Moved" if trash else "Deleted"
+        where = "to trash " if trash else ""
+        line = "moving to trash:" if trash else "deleting:"
+        at = (
+            f"at {path}" if path is not None
+            else "reading the orphan list back from its temporary file"
+        )
         super().__init__(
-            f"Deleted {completed} of {total} file(s) before failing at "
-            f"{path}: {cause}. The files listed before it are already gone; "
-            f"the rest were not touched."
+            f"{done} {completed} of {total} file(s) {where}before failing "
+            f"{at}: {cause}. Files listed under `{line}` above (before the "
+            f"failure) are already {'moved' if trash else 'gone'}; the rest "
+            f"were not touched."
         )
 
 
@@ -50,7 +65,8 @@ def delete_orphans(
     removed, so a single disallowed entry aborts the whole batch without having
     destroyed the entries listed before it. If an ``OSError`` occurs during
     execution, ``DeletionFailed`` is raised with the count of entries already
-    removed.
+    removed. An ``OSError`` raised before that (including a failure to read
+    ``orphans`` back during validation) means nothing was removed.
     """
     if trash_dir is not None and results_dir_name is None:
         raise ValueError("results_dir_name is required when trash_dir is set")
@@ -102,7 +118,18 @@ def delete_orphans(
                         f"directory, or choose another."
                     )
                 checked_ancestors.add(ancestor)
-    for completed, orphan in enumerate(orphans):
+    # Everything above is validation: nothing has been removed yet. From
+    # here on any failure, including reading the list back, is mid-batch.
+    trashing = trash_dir is not None
+    completed = 0
+    iterator = iter(orphans)
+    while True:
+        try:
+            orphan = next(iterator)
+        except StopIteration:
+            break
+        except OSError as exc:
+            raise DeletionFailed(completed, total, None, exc, trash=trashing) from exc
         path = orphan.path
         try:
             if trash_dir is not None:
@@ -115,4 +142,5 @@ def delete_orphans(
                 print(f"deleting: {path}", file=sys.stderr)
                 path.unlink()
         except OSError as exc:
-            raise DeletionFailed(completed, total, path, exc) from exc
+            raise DeletionFailed(completed, total, path, exc, trash=trashing) from exc
+        completed += 1

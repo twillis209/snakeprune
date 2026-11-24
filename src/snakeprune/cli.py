@@ -602,9 +602,9 @@ def _scan_and_report(
     def _spool_failed(exc: OSError) -> typer.Exit:
         # The spool is the deletion list; never act on a partial one.
         typer.echo(
-            f"Refusing to continue: could not record the orphan list in a "
-            f"temporary file ({exc}). Nothing was deleted. Point TMPDIR at a "
-            f"filesystem with free space.",
+            f"Refusing to continue: could not record or read back the orphan "
+            f"list in a temporary file ({exc}). Nothing was deleted. Point "
+            f"TMPDIR at a filesystem with free space.",
             err=True,
         )
         return typer.Exit(code=3)
@@ -775,11 +775,14 @@ def _scan_and_report(
     n_delete = len(to_delete)
     if deleting and n_delete:
         total_bytes = 0
-        for o in to_delete:
-            try:
-                total_bytes += o.path.stat().st_size
-            except OSError:
-                pass
+        try:
+            for o in to_delete:
+                try:
+                    total_bytes += o.path.stat().st_size
+                except OSError:
+                    pass
+        except OSError as exc:
+            raise _spool_failed(exc)
         typer.echo(
             f"About to delete {n_delete} file(s), {total_bytes} byte(s).",
             err=True,
@@ -833,12 +836,6 @@ def _scan_and_report(
             typer.echo(f"Refusing to delete: {exc}", err=True)
             raise typer.Exit(code=3)
         except OSError as exc:
-            # Reading the spooled list failed mid-batch. Every file already
-            # removed was in the deletion set; the rest were not touched.
-            typer.echo(
-                f"Stopped: could not read the orphan list back from its "
-                f"temporary file ({exc}). Files listed under `deleting:` "
-                f"above are gone; the rest were not touched.",
-                err=True,
-            )
-            raise typer.Exit(code=5)
+            # delete_orphans reports any failure once removal has begun as
+            # DeletionFailed, so a bare OSError comes from validation.
+            raise _spool_failed(exc)

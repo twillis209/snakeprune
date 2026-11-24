@@ -2224,3 +2224,71 @@ def test_cli_reports_files_kept_only_as_inputs(make_pipeline, make_results):
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
     assert "Kept 2 file(s) only because a rule reads them as input" in result.stderr
+
+
+def _fail_spool_reads(monkeypatch, from_call, after_items):
+    """Make OrphanSpool.iter_orphans raise OSError from its `from_call`-th call on,
+    after yielding `after_items` orphans."""
+    from snakeprune import report
+
+    real = report.OrphanSpool.iter_orphans
+    calls = {"n": 0}
+
+    def flaky(self, include_ambiguous=True):
+        calls["n"] += 1
+        n = calls["n"]
+        for i, o in enumerate(real(self, include_ambiguous=include_ambiguous)):
+            if n >= from_call and i == after_items:
+                raise OSError("orphan spool is truncated")
+            yield o
+
+    monkeypatch.setattr(report.OrphanSpool, "iter_orphans", flaky)
+    return calls
+
+
+def test_cli_scan_spool_read_failure_before_deleting_says_nothing_deleted(
+    make_pipeline, make_results, monkeypatch
+):
+    # A read-back failure while the batch is still being validated removes
+    # nothing; the message must not claim files are gone.
+    from snakeprune import delete as delete_mod
+
+    real_delete = delete_mod.delete_orphans
+
+    def failing_validation(orphans, **kw):
+        _fail_spool_reads(monkeypatch, from_call=1, after_items=0)
+        return real_delete(orphans, **kw)
+
+    monkeypatch.setattr("snakeprune.cli.delete_orphans", failing_validation)
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3, result.output
+    assert "Nothing was deleted" in result.stderr
+    assert "are gone" not in result.stderr
+    assert (results / "junk.csv").exists()
+
+
+def test_cli_scan_spool_read_failure_mid_trash_reports_count_and_verb(
+    make_pipeline, make_results, monkeypatch, tmp_path
+):
+    from snakeprune import delete as delete_mod
+
+    real_delete = delete_mod.delete_orphans
+
+    def failing_action(orphans, **kw):
+        # Pass 1 peeks for emptiness, pass 2 validates; pass 3 (the moves)
+        # fails after one file.
+        _fail_spool_reads(monkeypatch, from_call=3, after_items=1)
+        return real_delete(orphans, **kw)
+
+    monkeypatch.setattr("snakeprune.cli.delete_orphans", failing_action)
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["j1.csv", "j2.csv"])
+    trash = tmp_path / "trash"
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes"]
+    )
+    assert result.exit_code == 5, result.output
+    assert "Moved 1 of 2" in result.stderr
+    assert "Nothing was deleted" not in result.stderr
