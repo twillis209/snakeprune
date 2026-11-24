@@ -23,6 +23,7 @@ from snakeprune.patterns import (
     results_match_prefix,
     rule_literal_prefixes,
 )
+from snakeprune.ignorefile import IGNORE_FILE_NAME, IgnoreFileError, load_ignore_file
 from snakeprune.report import (
     AmbiguityExplainer,
     DirectorySummary,
@@ -45,9 +46,10 @@ DEFAULT_NAUGHTY_DIRS = frozenset(
 class ExcludeDirError(ValueError):
     """An --exclude-dir value that cannot be honoured; carries the reason."""
 
-    def __init__(self, value: str, resolved: str, reason: str) -> None:
+    def __init__(self, value: str, resolved: str, reason: str, label: str = "--exclude-dir") -> None:
+        self.value, self.resolved, self.reason = value, resolved, reason
         super().__init__(
-            f"--exclude-dir `{value}` (resolved to `{resolved}`) {reason}. "
+            f"{label} `{value}` (resolved to `{resolved}`) {reason}. "
             "Relative paths resolve against the results directory."
         )
 
@@ -59,7 +61,9 @@ def _nested_rel(path: str, base: str) -> Optional[str]:
     return None
 
 
-def _resolve_exclude_dirs(results_dir: Path, values: Sequence[str]) -> list[str]:
+def _resolve_exclude_dirs(
+    results_dir: Path, values: Sequence[str], labels: Sequence[str] | None = None
+) -> list[str]:
     """Validate ``--exclude-dir`` values and return them in the form the
     walker compares against: ``abspath(join(results_dir, rel))``.
 
@@ -69,43 +73,54 @@ def _resolve_exclude_dirs(results_dir: Path, values: Sequence[str]) -> list[str]
     """
     out: list[str] = []
     base = os.fspath(results_dir)
-    for value in values:
-        joined = value if os.path.isabs(value) else os.path.join(base, value)
-        lexical = os.path.abspath(joined)
-        if not os.path.lexists(lexical):
-            raise ExcludeDirError(value, lexical, "does not exist")
-        if os.path.islink(lexical):
-            raise ExcludeDirError(value, lexical, "is a symlink; the scan never descends into symlinked directories")
-        if not os.path.isdir(lexical):
-            raise ExcludeDirError(value, lexical, "is not a directory")
-        rel = _nested_rel(lexical, os.path.abspath(base))
-        if rel is None:
-            rel = _nested_rel(os.path.realpath(lexical), os.path.realpath(base))
-        if rel is None:
-            raise ExcludeDirError(value, lexical, "is not strictly inside the results directory")
-        target = os.path.abspath(os.path.join(base, rel))
-        if os.path.islink(target) or not os.path.isdir(target):
-            raise ExcludeDirError(value, target, "is not a real directory inside the results directory")
-        # The walker compares path strings exactly, so every component must be
-        # spelled as on disk (case-insensitive filesystems accept other cases).
-        parent = base
-        for part in rel.split(os.sep):
-            if part not in os.listdir(parent):
-                raise ExcludeDirError(
-                    value, target,
-                    "does not match the on-disk spelling of any directory (check letter case)",
-                )
-            parent = os.path.join(parent, part)
-            # The walk never passes through a symlinked directory, so it
-            # reaches these files by another path that this would not exclude.
-            if os.path.islink(parent):
-                raise ExcludeDirError(
-                    value, target,
-                    f"is reached through the symlink `{parent}`; name the "
-                    "directory by its real path",
-                )
-        out.append(target)
+    for index, value in enumerate(values):
+        label = labels[index] if labels is not None else "--exclude-dir"
+        try:
+            out.append(_resolve_exclude_dir(base, value))
+        except ExcludeDirError as exc:
+            if label == "--exclude-dir":
+                raise
+            raise ExcludeDirError(exc.value, exc.resolved, exc.reason, label=label) from None
     return out
+
+
+def _resolve_exclude_dir(base: str, value: str) -> str:
+    """Validate one directory (see ``_resolve_exclude_dirs``)."""
+    joined = value if os.path.isabs(value) else os.path.join(base, value)
+    lexical = os.path.abspath(joined)
+    if not os.path.lexists(lexical):
+        raise ExcludeDirError(value, lexical, "does not exist")
+    if os.path.islink(lexical):
+        raise ExcludeDirError(value, lexical, "is a symlink; the scan never descends into symlinked directories")
+    if not os.path.isdir(lexical):
+        raise ExcludeDirError(value, lexical, "is not a directory")
+    rel = _nested_rel(lexical, os.path.abspath(base))
+    if rel is None:
+        rel = _nested_rel(os.path.realpath(lexical), os.path.realpath(base))
+    if rel is None:
+        raise ExcludeDirError(value, lexical, "is not strictly inside the results directory")
+    target = os.path.abspath(os.path.join(base, rel))
+    if os.path.islink(target) or not os.path.isdir(target):
+        raise ExcludeDirError(value, target, "is not a real directory inside the results directory")
+    # The walker compares path strings exactly, so every component must be
+    # spelled as on disk (case-insensitive filesystems accept other cases).
+    parent = base
+    for part in rel.split(os.sep):
+        if part not in os.listdir(parent):
+            raise ExcludeDirError(
+                value, target,
+                "does not match the on-disk spelling of any directory (check letter case)",
+            )
+        parent = os.path.join(parent, part)
+        # The walk never passes through a symlinked directory, so it
+        # reaches these files by another path that this would not exclude.
+        if os.path.islink(parent):
+            raise ExcludeDirError(
+                value, target,
+                f"is reached through the symlink `{parent}`; name the "
+                "directory by its real path",
+            )
+    return target
 
 
 def _is_inside(path: Path, directory: Path) -> bool:
@@ -320,8 +335,30 @@ def scan(
             raise typer.Exit(code=3)
 
     try:
-        _compile_globs(ignore or ())
+        ignore_file = load_ignore_file(results_dir)
+    except IgnoreFileError as exc:
+        typer.echo(f"Refusing to scan: {exc}", err=True)
+        raise typer.Exit(code=3)
+    file_globs: list[str] = []
+    if ignore_file is not None:
+        file_globs = [glob for _, glob in ignore_file.globs]
+        log(
+            f"Protecting {ignore_file.entry_count} entr"
+            f"{'y' if ignore_file.entry_count == 1 else 'ies'} from {ignore_file.path}."
+        )
+    # The ignore file itself lives in the results tree and is never an orphan.
+    ignore = [*(ignore or ()), *file_globs, IGNORE_FILE_NAME]
+    try:
+        _compile_globs(ignore)
         exclude_dirs = _resolve_exclude_dirs(results_dir, exclude_dir or ())
+        if ignore_file is not None and ignore_file.dirs:
+            exclude_dirs += _resolve_exclude_dirs(
+                results_dir,
+                [d for _, d in ignore_file.dirs],
+                labels=[
+                    f"{ignore_file.path.name} line {e.line}" for e, _ in ignore_file.dirs
+                ],
+            )
     except (ExcludeDirError, ValueError) as exc:
         typer.echo(f"Refusing to scan: {exc}", err=True)
         raise typer.Exit(code=3)
@@ -459,6 +496,7 @@ def scan(
             trash=trash,
             results_name=results_name,
             log=log,
+            ignore_file=ignore_file,
         )
     finally:
         spool.close()
@@ -491,6 +529,7 @@ def _scan_and_report(
     trash,
     results_name: str,
     log,
+    ignore_file=None,
 ) -> None:
     file_count = 0
     target_prefixes = [match_prefix]
@@ -522,6 +561,7 @@ def _scan_and_report(
         follow_symlinks=follow_symlinks,
         exclude_dirs=tuple(set(exclude_dirs)),
         stats=walk_stats,
+        track_globs=[g for _, g in ignore_file.globs] if ignore_file else (),
     ):
         if limit is not None and file_count >= limit:
             break
@@ -577,6 +617,19 @@ def _scan_and_report(
             f"Excluded {excluded_dirs} directory subtree(s) from the scan.",
             err=True,
         )
+
+    unmatched = []
+    if ignore_file is not None and limit is None:
+        hits = walk_stats.get("glob_hits", set())
+        unmatched = [e for i, (e, _) in enumerate(ignore_file.globs) if i not in hits]
+    if unmatched:
+        typer.echo(
+            f"WARNING: {len(unmatched)} entr{'y' if len(unmatched) == 1 else 'ies'} "
+            f"in {ignore_file.path} matched no files (a typo protects nothing):",
+            err=True,
+        )
+        for e in unmatched:
+            typer.echo(f"  line {e.line}: {e.text}", err=True)
 
     high_rate = False
     if file_count > 0:
@@ -647,6 +700,14 @@ def _scan_and_report(
             f"About to delete {n_delete} file(s), {total_bytes} byte(s).",
             err=True,
         )
+        if unmatched:
+            typer.echo(
+                f"Refusing to delete: {ignore_file.path.name} has entries that "
+                f"matched no files, so something you meant to protect may be in "
+                f"the list above. Fix or remove those lines.",
+                err=True,
+            )
+            raise typer.Exit(code=3)
         if high_rate and not allow_high_orphan_rate:
             typer.echo(
                 "Refusing to delete: orphan rate exceeded threshold. Pass "

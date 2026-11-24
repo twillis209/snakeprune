@@ -67,7 +67,7 @@ def test_iter_results_files_exclude_dirs_counts_in_stats(make_results):
     exclude = os.path.abspath(results / "keep")
     stats: dict = {}
     list(iter_results_files(results, exclude_dirs=[exclude], stats=stats))
-    assert stats == {"skipped_symlinked_dirs": 0, "excluded_dirs": 1}
+    assert stats == {**{"skipped_symlinked_dirs": 0, "excluded_dirs": 1}, "glob_hits": set()}
 
 
 def test_iter_results_files_stats_counts_skipped_symlinked_dirs(make_results, tmp_path):
@@ -81,14 +81,14 @@ def test_iter_results_files_stats_counts_skipped_symlinked_dirs(make_results, tm
     assert "a.txt" in rels
     # The symlinked directory itself was skipped, and its contents were not visited.
     assert "link_dir/x.txt" not in rels
-    assert stats == {"skipped_symlinked_dirs": 1, "excluded_dirs": 0}
+    assert stats == {**{"skipped_symlinked_dirs": 1, "excluded_dirs": 0}, "glob_hits": set()}
 
 
 def test_iter_results_files_stats_zero_when_no_dir_symlinks(make_results):
     results = make_results(["a.txt", "sub/b.txt"])
     stats: dict = {}
     list(iter_results_files(results, stats=stats))
-    assert stats == {"skipped_symlinked_dirs": 0, "excluded_dirs": 0}
+    assert stats == {**{"skipped_symlinked_dirs": 0, "excluded_dirs": 0}, "glob_hits": set()}
 
 
 def test_iter_results_files_stats_omitted_does_not_error(make_results, tmp_path):

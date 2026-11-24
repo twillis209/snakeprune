@@ -5,7 +5,7 @@ import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Sequence
 
 from snakeprune.patterns import extract_literal_prefix, nfc
 
@@ -60,6 +60,7 @@ def iter_results_files(
     follow_symlinks: bool = False,
     exclude_dirs: Iterable[str] = (),
     stats: dict | None = None,
+    track_globs: Sequence[str] = (),
 ) -> Iterator[tuple[str, str]]:
     """Yield ``(full_path, rel_posix)`` string pairs for regular files under
     ``results_dir``, skipping ignored paths and (by default) symlinks.
@@ -85,8 +86,17 @@ def iter_results_files(
     governs whether symlinked *files* are yielded). It likewise initialises
     ``stats["excluded_dirs"] = 0`` and increments it once per directory
     pruned by ``exclude_dirs``.
+
+    ``track_globs`` (which must also be among ``ignore_globs``) are watched
+    individually: ``stats["glob_hits"]`` is set to the set of their indices
+    that matched at least one file, so the caller can flag a glob that
+    protected nothing (usually a typo).
     """
     ignore_re = _compile_globs(ignore_globs)
+    tracked = [(i, _compile_globs([g])) for i, g in enumerate(track_globs)]
+    glob_hits: set[int] = set()
+    if stats is not None:
+        stats["glob_hits"] = glob_hits
     exclude_set = {os.path.abspath(p) for p in exclude_dirs}
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
@@ -142,8 +152,14 @@ def iter_results_files(
                 rel = full_path[base_len:]
                 if needs_sep_swap:
                     rel = rel.replace(sep, "/")
-                if ignore_re is not None and ignore_re.fullmatch(nfc(rel)):
-                    continue
+                if ignore_re is not None:
+                    norm = nfc(rel)
+                    if ignore_re.fullmatch(norm):
+                        if len(glob_hits) < len(tracked):
+                            for i, rx in tracked:
+                                if i not in glob_hits and rx is not None and rx.fullmatch(norm):
+                                    glob_hits.add(i)
+                        continue
                 yield full_path, rel
 
 

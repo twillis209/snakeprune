@@ -6,15 +6,17 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **246 tests**, split across five files:
+As of this writing the suite is **261 tests**, split across six files:
 
 - `tests/test_patterns.py` (82) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (24) — does it find the right files on disk?
 - `tests/test_delete.py` (20) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (112) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (118) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
+- `tests/test_ignorefile.py` (6 functions, 9 cases) — is `.snakepruneignore`
+  parsed exactly, and are entries it cannot interpret refused?
 - `tests/test_report.py` (8) — does the on-disk orphan list return exactly
   what was written, and do the summary and wildcard report count correctly?
 
@@ -318,6 +320,17 @@ genuinely mean it.
    ordinary orphan (`test_cli_scan_following_the_wildcard_advice_makes_a_plain_orphan`).
    A wildcard explicitly constrained to `.+` is not reported as unconstrained
    (`test_cli_scan_explicit_dotplus_constraint_not_reported_unconstrained`).
+
+16. **`.snakepruneignore` protects what it names, and a typo is refused.**
+   Directory, glob-directory and glob entries keep files out of the listing,
+   `--delete` and `--trash` (`test_cli_ignore_file_protects_directory_from_listing_and_delete`,
+   `test_cli_ignore_file_glob_dir_and_glob`); the file itself is never an
+   orphan (`test_cli_ignore_file_itself_is_never_an_orphan`); a directory entry
+   that does not exist refuses the scan
+   (`test_cli_ignore_file_missing_directory_is_refused`); a glob that matched
+   nothing refuses deletion
+   (`test_cli_ignore_file_unmatched_glob_warns_then_refuses_delete`); `!`
+   negation is refused (`test_cli_ignore_file_negation_is_refused`).
 
 ## The headline data-loss invariants
 

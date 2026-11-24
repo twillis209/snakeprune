@@ -80,6 +80,27 @@ Run `snakeprune scan --help` for the full list of options.
 - **`--ignore` globs.** `*` crosses `/`, and `**/` also matches zero directories, so `--ignore "**/*.bai"` covers `.bai` files at the top level as well as nested ones. A glob may use `**/` in at most three separate places; more is refused (exit 3) because matching would become very slow.
 - **`print()` in Snakefiles is fine.** Anything the workflow (or its child processes) writes to stdout is diverted to stderr so it cannot corrupt the extractor's JSON.
 
+### Protecting files permanently: `.snakepruneignore`
+
+Put a `.snakepruneignore` file at the top of the results directory to record what `snakeprune` must never list or delete, so keeping a snapshot does not depend on remembering `--exclude-dir` on every run. Every scan of that directory applies it, alongside any `--ignore` / `--exclude-dir` flags.
+
+```
+# Snapshots and hand-made workups: keep
+_old_precorr_2026-11-04/
+ad_hoc/
+# Every top-level directory starting with an underscore
+_*/
+# Individual files
+*.ipynb
+```
+
+- Entries are relative to the results directory and anchored there (unlike `.gitignore`, `notes/` means `results/notes/`, not any `notes/`).
+- `name/` protects that directory subtree, which is skipped entirely, exactly like `--exclude-dir`. It must exist: a misspelt directory would protect nothing, so the scan is refused (exit 3) with the line number.
+- `pattern/` with glob characters (`_*/`) protects everything under any directory it matches.
+- Anything else is a glob with `--ignore` semantics.
+- A glob that matches no file is reported; under `--delete` / `--trash` the run is refused (exit 3) until you fix or remove the line, because the files it was meant to protect may be in the deletion list.
+- `!` negation, absolute paths and `..` are refused rather than guessed at. The file itself is never treated as an orphan.
+
 ## Safety and limitations
 
 `snakeprune` is destructive at the user's request, so the CLI tries hard to refuse rather than do the wrong thing.
@@ -130,7 +151,7 @@ The guards below catch a wrong target or a broken workflow load. They cannot cat
 
 ### Recommended first-use workflow
 
-1. Run a plain `snakeprune scan <pipeline> <results>` and eyeball the orphan list. On a large tree, start with `--summary` to see which directories the orphans are in, then `--exclude-dir` anything you want to keep.
+1. Run a plain `snakeprune scan <pipeline> <results>` and eyeball the orphan list. On a large tree, start with `--summary` to see which directories the orphans are in, then list anything you want to keep in `results/.snakepruneignore`.
 2. If the list looks right, re-run with `--trash some/staging/dir` to move (not unlink) the orphans.
 3. After a few days of confidence that nothing's missing, delete the trash directory.
 

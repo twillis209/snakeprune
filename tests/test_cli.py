@@ -2011,3 +2011,75 @@ def test_cli_scan_explicit_dotplus_constraint_not_reported_unconstrained(make_pi
     assert result.exit_code == 0, result.output
     assert f"ambiguous: {results / 'a/fixed/b/c/x.csv'}" in result.stderr
     assert "fit: 1 file(s); unconstrained: {eqtl}\n" in result.stderr
+
+
+def _with_ignore_file(results, text):
+    (results / ".snakepruneignore").write_text(text)
+    return results
+
+
+def test_cli_ignore_file_protects_directory_from_listing_and_delete(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(
+        make_results(_LIVE + ["_snap/a/old.csv", "junk.csv"]), "# snapshots\n_snap/\n"
+    )
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+    assert (results / "_snap/a/old.csv").exists()
+    assert (results / ".snakepruneignore").exists()
+    assert "Protecting 1 entry from" in result.stderr
+
+
+def test_cli_ignore_file_glob_dir_and_glob(make_pipeline, make_results, tmp_path):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(
+        make_results(_LIVE + ["_a/x.csv", "_b/c/y.csv", "keep.log", "junk.csv"]),
+        "_*/\n*.log\n",
+    )
+    trash = tmp_path / "trash"
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes"])
+    assert result.exit_code == 0, result.output
+    for kept in ("_a/x.csv", "_b/c/y.csv", "keep.log", ".snakepruneignore"):
+        assert (results / kept).exists(), kept
+    assert (trash / "results" / "junk.csv").exists()
+
+
+def test_cli_ignore_file_itself_is_never_an_orphan(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE), "# nothing yet\n")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert (results / ".snakepruneignore").exists()
+
+
+def test_cli_ignore_file_missing_directory_is_refused(make_pipeline, make_results):
+    # A typo'd directory would protect nothing; refuse rather than proceed.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE + ["_snap/old.csv"]), "\n_snpa/\n")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 3
+    assert ".snakepruneignore line 2 `_snpa`" in result.stderr
+    assert "does not exist" in result.stderr
+
+
+def test_cli_ignore_file_unmatched_glob_warns_then_refuses_delete(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE + ["keep.lgo", "junk.csv"]), "*.log\n")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 0, dry.output
+    assert "matched no files" in dry.stderr and "line 1: *.log" in dry.stderr
+    wet = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert wet.exit_code == 3
+    assert "Refusing to delete" in wet.stderr
+    assert (results / "junk.csv").exists() and (results / "keep.lgo").exists()
+
+
+def test_cli_ignore_file_negation_is_refused(make_pipeline, make_results):
+    pipeline = make_pipeline(_ONE_RULE)
+    results = _with_ignore_file(make_results(_LIVE + ["junk.csv"]), "!junk.csv\n")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert result.exit_code == 3
+    assert "negation" in result.stderr
+    assert (results / "junk.csv").exists()
