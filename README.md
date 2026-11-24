@@ -51,7 +51,8 @@ snakeprune scan path/to/pipeline path/to/results --ignore "notes/**" --ignore "*
 # Skip an entire existing subtree from the walk (faster than --ignore for big dirs)
 snakeprune scan path/to/pipeline path/to/results --exclude-dir old_results_to_keep
 
-# Show only the first 20 orphans (the whole tree is still walked and checked)
+# Show only the first 20 deletable orphans (ambiguous ones on stderr are not
+# counted; the whole tree is still walked and checked)
 snakeprune scan path/to/pipeline path/to/results --limit 20
 
 # Let unconstrained wildcards span '/' (Snakemake's own default); fewer orphans

@@ -2791,3 +2791,19 @@ def test_cli_absolute_output_with_wildcard_in_last_component_can_alias_results(
         assert result.exit_code == 4, (out, result.output)
         assert result.stdout == ""
         assert "--allow-wildcard-absolute-paths" in result.stderr
+
+
+def test_cli_limit_counts_only_listed_deletable_orphans(make_pipeline, make_results):
+    # Ambiguous orphans go to stderr and are never deleted; they must not
+    # use up the --limit on stdout lines.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(
+        _LIVE + ["a/1.txt", "a/2.txt", "a/3.txt", "j1.csv", "j2.csv", "j3.csv"]
+    )
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--limit", "2", "--allow-high-orphan-rate"]
+    )
+    assert result.exit_code == 0, result.output
+    listed = result.stdout.split()
+    assert len(listed) == 2 and all(p.endswith(".csv") for p in listed)
+    assert "1 more deletable orphan(s) not listed" in result.stderr

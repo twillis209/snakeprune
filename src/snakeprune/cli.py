@@ -302,7 +302,8 @@ def scan(
     limit: Optional[int] = typer.Option(
         None,
         "--limit",
-        help="List at most N orphans. The whole tree is still walked, so "
+        help="List at most N deletable orphans on stdout (ambiguous ones on "
+             "stderr are not counted). The whole tree is still walked, so "
              "every guard sees all of it. Refused with --delete/--trash.",
     ),
 ) -> None:
@@ -846,23 +847,29 @@ def _scan_and_report(
         # stdout carries exactly the files --delete would remove, so a held-back
         # ambiguous orphan goes to stderr and cannot be piped into `rm` by accident.
         try:
+            # --limit caps only the stdout lines (the deletable orphans);
+            # ambiguous ones on stderr are always shown in full.
             listed = 0
+            not_listed = 0
             for orphan in spool.iter_orphans():
-                if limit is not None and listed >= limit:
-                    typer.echo(
-                        f"--limit {limit}: {n_orphans - listed} more orphan(s) "
-                        f"not listed.",
-                        err=True,
-                    )
-                    break
-                listed += 1
+                held_back = orphan.ambiguous and not delete_ambiguous
+                if not held_back and limit is not None and listed >= limit:
+                    not_listed += 1
+                    continue
                 line = str(orphan.path)
                 if rule_attribution and orphan.likely_rule:
                     line += f"\t(likely: {orphan.likely_rule})"
-                if orphan.ambiguous and not delete_ambiguous:
+                if held_back:
                     typer.echo(f"ambiguous: {line}", err=True)
                 else:
+                    listed += 1
                     typer.echo(line)
+            if not_listed:
+                typer.echo(
+                    f"--limit {limit}: {not_listed} more deletable orphan(s) "
+                    f"not listed.",
+                    err=True,
+                )
         except OSError as exc:
             raise _spool_failed(exc)
 
