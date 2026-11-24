@@ -292,11 +292,12 @@ def scan(
     allow_wildcard_absolute_paths: bool = typer.Option(
         False,
         "--allow-wildcard-absolute-paths",
-        help="Drop, with a warning, absolute rule paths outside the results "
-             "dir that have a wildcard in a directory part, instead of "
-             "refusing (exit 4). Any live file such a path names inside the "
-             "results dir (via a wildcard value or symlink) is then listed "
-             "as an orphan.",
+        help="Drop (outputs) or skip (inputs), with a warning, absolute rule "
+             "paths outside the results dir that contain any wildcard, "
+             "instead of refusing (exit 4). Snakemake wildcards may contain "
+             "`/`, so such a path may still name files inside the results "
+             "dir (via a wildcard value or a symlink); any it does is then "
+             "listed as an orphan and deleted by --delete.",
     ),
     limit: Optional[int] = typer.Option(
         None,

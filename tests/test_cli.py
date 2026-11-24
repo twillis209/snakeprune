@@ -967,7 +967,10 @@ def test_cli_scan_foreign_absolute_output_warns_even_when_quiet(make_pipeline, m
         "    shell: 'touch {output}'\n"
     )
     results = make_results(["1.txt"])
-    result = runner.invoke(app, ["scan", str(pipeline), str(results), "--quiet"])
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--quiet", "--allow-wildcard-absolute-paths"],
+    )
     assert result.exit_code == 0, result.output
     assert "/nowhere/elsewhere/{n}.txt" in result.output
     assert "WARNING" in result.output
@@ -983,7 +986,9 @@ def test_cli_scan_all_rules_foreign_absolute_hits_empty_rule_refusal(make_pipeli
         "    shell: 'touch {output}'\n"
     )
     results = make_results(["1.txt"])
-    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-wildcard-absolute-paths"]
+    )
     assert result.exit_code == 3
     assert "Refusing to scan" in result.output
 
@@ -2757,3 +2762,32 @@ def test_cli_limit_caps_the_listing(make_pipeline, make_results):
     assert result.exit_code == 0, result.output
     assert len(result.stdout.split()) == 2
     assert "Scanned 9 file(s); found 4 orphan(s)." in result.stderr
+
+
+def test_cli_absolute_output_with_wildcard_in_last_component_can_alias_results(
+    make_pipeline, tmp_path
+):
+    # `<base>/{x}.dat` names <base>/proj/results/live.dat with
+    # x=proj/results/live; `<base>/al{x}.dat` reaches it through the symlink
+    # <base>/alias -> proj. Both are refused by default.
+    base = tmp_path / "base"
+    results = base / "proj" / "results"
+    results.mkdir(parents=True)
+    for name in _LIVE + ["live.dat"]:
+        (results / name).touch()
+    (base / "alias").symlink_to(base / "proj")
+    for out in (f"{base}/{{x}}.dat", f"{base}/al{{x}}.dat"):
+        pipeline_dir = tmp_path / f"p{abs(hash(out)) % 1000}"
+        pipeline_dir.mkdir()
+        (pipeline_dir / "Snakefile").write_text(
+            "rule a:\n"
+            "    output: 'results/{n}.txt'\n"
+            "    shell: 'touch {output}'\n"
+            "rule b:\n"
+            f"    output: '{out}'\n"
+            "    shell: 'touch {output}'\n"
+        )
+        result = runner.invoke(app, ["scan", str(pipeline_dir), str(results)])
+        assert result.exit_code == 4, (out, result.output)
+        assert result.stdout == ""
+        assert "--allow-wildcard-absolute-paths" in result.stderr

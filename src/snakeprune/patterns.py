@@ -471,9 +471,11 @@ def _may_lie_in_results(
 WILDCARD_ABSOLUTE_FLAG = "--allow-wildcard-absolute-paths"
 
 
-def _wildcard_in_directory_part(path: str) -> bool:
-    """Whether any component of `path` but the last holds a brace."""
-    return any("{" in seg or "}" in seg for seg in _split_outside_wildcards(path)[:-1])
+def _has_wildcard(path: str) -> bool:
+    """Whether `path` holds a brace anywhere. Snakemake's wildcards may span
+    `/` (`.+`), so a wildcard in any component, even the last, can lead an
+    absolute path anywhere below the literal text before it."""
+    return "{" in path or "}" in path
 
 
 def _same_or_ancestor(candidate: str, results_dir: Path) -> bool:
@@ -498,24 +500,20 @@ def _same_or_ancestor(candidate: str, results_dir: Path) -> bool:
 
 
 def _absolute_contains_results(path: str, results_dir: Path | None) -> bool:
-    """For an absolute path with no wildcard in its directory part that may
-    be a directory: whether it could be the results dir or an ancestor of it
-    (a literal path naming one, or a final-component wildcard directly
-    under one)."""
+    """For a literal absolute path that may be a directory: whether it is the
+    results dir or an ancestor of it."""
     if results_dir is None:
         return False
-    segs = _split_outside_wildcards(path)
-    if "{" in segs[-1] or "}" in segs[-1]:
-        return _same_or_ancestor("/".join(segs[:-1]) or "/", results_dir)
     return _same_or_ancestor(path, results_dir)
 
 
 def _wildcard_absolute_message(what: str, results_dir: Path | None) -> str:
     return (
         f"{what} is absolute, does not lie under the scanned results "
-        f"directory `{results_dir}` as written, and has a wildcard in a "
-        f"directory part, so snakeprune cannot tell whether some wildcard "
-        f"value (or a symlink) makes it name files inside that directory. "
+        f"directory `{results_dir}` as written, and has a wildcard. Snakemake "
+        f"lets a wildcard value contain `/`, so snakeprune cannot tell "
+        f"whether some value (or a symlink) makes it name files inside that "
+        f"directory. "
         f"Refusing: dropping it could list live files as orphans. Pass "
         f"{WILDCARD_ABSOLUTE_FLAG} to drop such paths with a warning instead; "
         f"do so only if they never lead into the results directory, since "
@@ -572,7 +570,7 @@ def build_rule_patterns(
     """Compile already-extracted rule specs; see `find_rule_patterns`.
 
     An absolute path that does not lie under `results_dir` and has a
-    wildcard in a directory part raises `PatternError` unless
+    wildcard anywhere raises `PatternError` unless
     `allow_wildcard_absolute`, when it is dropped with a warning; a
     `directory()` output that may be the results dir or an ancestor raises.
 
@@ -604,7 +602,7 @@ def build_rule_patterns(
                 )
                 if rewritten is None:
                     what = f"Rule `{spec.name}` path `{raw_path}`"
-                    if results_dir is not None and _wildcard_in_directory_part(output_str):
+                    if results_dir is not None and _has_wildcard(output_str):
                         if not allow_wildcard_absolute:
                             raise PatternError(_wildcard_absolute_message(what, results_dir))
                         if on_warning is not None:
@@ -800,7 +798,7 @@ def build_input_patterns(
     directory itself, an absolute directory that may contain the results
     dir) raises `PatternError`, as an unusable output does: skipping it
     could list a live file as an orphan. An absolute input outside the
-    results dir with a wildcard in a directory part raises too, unless
+    results dir with a wildcard anywhere raises too, unless
     `allow_wildcard_absolute`, when it is skipped with a warning.
     """
     matcher = InputMatcher()
@@ -821,7 +819,7 @@ def build_input_patterns(
             if path.startswith("/"):
                 rewritten = _rewrite_under_results_dir(path, results_dir, match_prefix)
                 if rewritten is None:
-                    if results_dir is not None and _wildcard_in_directory_part(path):
+                    if results_dir is not None and _has_wildcard(path):
                         if not allow_wildcard_absolute:
                             raise PatternError(_wildcard_absolute_message(
                                 f"The input `{raw}` of rule `{spec.name}`", results_dir

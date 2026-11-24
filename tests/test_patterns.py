@@ -851,7 +851,7 @@ def test_find_rule_patterns_leading_dotdot_outside_results_is_dropped_with_warni
 ):
     pipeline = make_pipeline(
         "rule a:\n"
-        "    output: '../elsewhere/{s}.txt'\n"
+        "    output: '../elsewhere/x.txt'\n"
         "    shell: 'touch {output}'\n"
     )
     results = make_results(["1.txt"])
@@ -1080,7 +1080,7 @@ def test_absolute_directory_output_containing_results_dir_is_refused():
 
 def test_absolute_output_outside_results_dir_is_still_dropped_with_warning():
     warnings: list[str] = []
-    pats, _ = _build(outputs=["/data/raw/{s}.txt", "/data/p1/res/{s}.txt"], warnings=warnings)
+    pats, _ = _build(outputs=["/data/raw/x.txt", "/data/p1/res/y.txt"], warnings=warnings)
     assert pats == [] and len(warnings) == 2
 
 
@@ -1108,9 +1108,11 @@ def test_absolute_output_in_another_case_is_not_mapped_when_spellings_differ(
     results, spec = _case_variant_setup(tmp_path)
     monkeypatch.setattr("snakeprune.patterns.os.path.samefile", lambda a, b: False)
     warnings: list[str] = []
-    pats = _brp([spec], Path("/wd"), on_warning=warnings.append,
-                results_dir=results, match_prefix="results/")
-    assert pats == [] and len(warnings) == 1
+    # Not mapped, so it is an absolute wildcard path outside the results
+    # dir, which is refused.
+    with pytest.raises(_PatternError, match="--allow-wildcard-absolute-paths"):
+        _brp([spec], Path("/wd"), on_warning=warnings.append,
+             results_dir=results, match_prefix="results/")
 
 
 def test_absolute_input_with_wildcard_above_results_dir_is_refused():
@@ -1119,7 +1121,7 @@ def test_absolute_input_with_wildcard_above_results_dir_is_refused():
 
 
 def test_absolute_input_outside_results_dir_is_skipped_silently():
-    _, m = _build(outputs=["results/{s}.txt"], inputs=["/data/raw/{s}.fq", "/ref/genome.fa"])
+    _, m = _build(outputs=["results/{s}.txt"], inputs=["/data/raw/all.fq", "/ref/genome.fa"])
     assert len(m) == 0
 
 
@@ -1208,12 +1210,18 @@ def test_log_paths_widen_the_union_since_they_decide_job_wildcards():
     assert log.match("results/logs/A1.log")
 
 
-def test_absolute_output_with_wildcard_only_in_final_component_is_dropped():
-    # `/data/p1/res{x}.txt` can never name a file inside /data/p1/results,
-    # though its text is a prefix of that directory's path.
-    warnings: list[str] = []
-    pats, _ = _build(outputs=["/data/p1/res{x}.txt"], warnings=warnings)
-    assert pats == [] and len(warnings) == 1
+def test_absolute_output_with_wildcard_only_in_final_component_is_refused():
+    # Snakemake's wildcards may span `/`: `/data/p1/res{x}.txt` with
+    # x=`ults/live` names /data/p1/results/live.txt.
+    with pytest.raises(_PatternError, match="--allow-wildcard-absolute-paths"):
+        _build(outputs=["/data/p1/res{x}.txt"])
+    with pytest.raises(_PatternError, match="--allow-wildcard-absolute-paths"):
+        _build(outputs=["/data/{x}.dat"])
+
+
+def test_absolute_input_with_wildcard_only_in_final_component_is_refused():
+    with pytest.raises(_PatternError, match="--allow-wildcard-absolute-paths"):
+        _build(outputs=["results/{s}.txt"], inputs=["/data/raw/{s}.fq"])
 
 
 def test_absolute_input_with_wildcard_directory_elsewhere_is_refused():
