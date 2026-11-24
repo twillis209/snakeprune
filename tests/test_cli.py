@@ -2855,3 +2855,82 @@ def test_cli_literal_absolute_input_that_is_a_symlink_to_results_protects_all(
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
+
+
+def _alias_pipeline(make_pipeline, rule_out="'results/{n}.txt'"):
+    return make_pipeline(
+        "rule a:\n"
+        f"    output: {rule_out}\n"
+        "    shell: 'touch {output}'\n"
+    )
+
+
+def test_cli_symlink_in_workdir_aliasing_results_refuses(make_pipeline):
+    # pa -> . in the workdir: `p{x}/results/live.dat` with x=a is
+    # pa/results/live.dat, i.e. results/live.dat, which no pattern matches.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        "    output: 'p{x}/results/live.dat'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = pipeline / "results"
+    results.mkdir()
+    for name in _LIVE + ["live.dat"]:
+        (results / name).touch()
+    (pipeline / "pa").symlink_to(".")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "pa" in dry.stderr and "--allow-results-aliases" in dry.stderr
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-results-aliases"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+
+
+def test_cli_results_dir_given_through_a_symlink_is_not_an_alias(make_pipeline, tmp_path):
+    pipeline = _alias_pipeline(make_pipeline)
+    real = tmp_path / "scratch" / "results"
+    real.mkdir(parents=True)
+    for name in _LIVE + ["junk.csv"]:
+        (real / name).touch()
+    (pipeline / "results").symlink_to(real)
+    result = runner.invoke(app, ["scan", str(pipeline), str(pipeline / "results")])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(pipeline / "results" / "junk.csv")]
+
+
+def test_cli_symlinked_ancestor_on_the_way_in_is_not_an_alias(make_pipeline, tmp_path):
+    pipeline = _alias_pipeline(make_pipeline, "'data/results/{n}.txt'")
+    store = tmp_path / "store"
+    (store / "results").mkdir(parents=True)
+    for name in _LIVE + ["junk.csv"]:
+        (store / "results" / name).touch()
+    (pipeline / "data").symlink_to(store)
+    results = pipeline / "data" / "results"
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links(
+    make_pipeline, tmp_path
+):
+    pipeline = _alias_pipeline(make_pipeline)
+    results = pipeline / "results"
+    results.mkdir()
+    for name in _LIVE + ["junk.csv"]:
+        (results / name).touch()
+    (pipeline / "broken").symlink_to(tmp_path / "missing")
+    (pipeline / ".snakemake").mkdir()
+    (pipeline / ".snakemake" / "env").symlink_to(results)
+    (tmp_path / "ref").mkdir()
+    (pipeline / "resources").mkdir()
+    (pipeline / "resources" / "ref").symlink_to(tmp_path / "ref")
+    (results / "inner_link").symlink_to(results)  # inside the results tree: skipped
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]

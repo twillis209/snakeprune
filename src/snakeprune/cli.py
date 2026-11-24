@@ -155,6 +155,68 @@ def _is_inside(path: Path, directory: Path) -> bool:
     return False
 
 
+def _find_results_aliases(workdir: Path, results_dir: Path) -> list[tuple[str, str]]:
+    """Symlinks in the workdir tree that lead into, onto or above the
+    results tree, as ``(link, resolved target)`` pairs.
+
+    A relative rule path through such a link (`pa -> .` and
+    `p{x}/results/x`) names a scanned file under a spelling snakeprune does
+    not match. Symlinks are never followed; the results tree itself and
+    `.snakemake/` are not scanned; broken links are ignored. The results
+    dir as given, and each of its lexical ancestors, are the way in and are
+    exempt. Only symlink entries are resolved, so the walk costs one
+    `scandir` per directory.
+    """
+    real_results = os.path.realpath(results_dir)
+    abs_results = os.path.abspath(results_dir)
+    real_workdir = os.path.realpath(workdir)
+    if real_workdir == real_results or real_workdir.startswith(real_results.rstrip(os.sep) + os.sep):
+        return []  # scanning the workdir itself: other guards cover it
+    exempt = {abs_results}
+    exempt.update(str(p) for p in Path(abs_results).parents)
+    skip_dirs = {abs_results, real_results}
+    prefix = real_results.rstrip(os.sep) + os.sep
+    hits: list[tuple[str, str]] = []
+    stack = [os.path.abspath(workdir)]
+    while stack:
+        current = stack.pop()
+        try:
+            it = os.scandir(current)
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                try:
+                    if entry.is_symlink():
+                        if entry.path in exempt:
+                            continue
+                        target = os.path.realpath(entry.path)
+                        if not os.path.exists(target):
+                            continue  # broken
+                        if (
+                            target == real_results
+                            or target.startswith(prefix)
+                            or real_results.startswith(target.rstrip(os.sep) + os.sep)
+                        ):
+                            hits.append((entry.path, target))
+                        continue
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                if entry.path in skip_dirs or (
+                    current == os.path.abspath(workdir) and entry.name == ".snakemake"
+                ):
+                    continue
+                try:
+                    if os.path.samefile(entry.path, real_results):
+                        continue
+                except OSError:
+                    pass
+                stack.append(entry.path)
+    return sorted(hits)
+
+
 def _same_file(a, b) -> bool:
     try:
         return os.path.samefile(a, b)
@@ -288,6 +350,15 @@ def scan(
         "--summary-depth",
         min=1,
         help="Directory levels below results_dir to group by in --summary.",
+    ),
+    allow_results_aliases: bool = typer.Option(
+        False,
+        "--allow-results-aliases",
+        help="Bypass the refusal (dry run or delete) when a symlink in the "
+             "working directory leads into, onto or above the results "
+             "directory. A rule path through such a link names results "
+             "files under another spelling, which snakeprune does not "
+             "match, so those files would be listed as orphans.",
     ),
     allow_wildcard_absolute_paths: bool = typer.Option(
         False,
@@ -441,6 +512,27 @@ def scan(
                 err=True,
             )
             raise typer.Exit(code=3)
+        if not allow_results_aliases:
+            aliases = _find_results_aliases(workdir, results_dir)
+            if aliases:
+                typer.echo(
+                    f"{refusing}: these symlinks in the working directory "
+                    f"lead into, onto or above the results directory, so a "
+                    f"rule path through them can name a results file under "
+                    f"a spelling snakeprune does not match, and the file "
+                    f"would be listed as an orphan:",
+                    err=True,
+                )
+                for link, target in aliases[:20]:
+                    typer.echo(f"  {link} -> {target}", err=True)
+                if len(aliases) > 20:
+                    typer.echo(f"  ... and {len(aliases) - 20} more", err=True)
+                typer.echo(
+                    "Pass --allow-results-aliases if no rule path goes "
+                    "through them.",
+                    err=True,
+                )
+                raise typer.Exit(code=3)
         match_prefix = results_match_prefix(
             pipeline_dir,
             results_dir,
