@@ -6,17 +6,18 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **278 tests**, split across six files:
+As of this writing the suite is **327 tests**, split across six files:
 
-- `tests/test_patterns.py` (86) — does snakeprune correctly understand what a
+- `tests/test_patterns.py` (104) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
-- `tests/test_walker.py` (24) — does it find the right files on disk?
-- `tests/test_delete.py` (20) — does the deletion primitive refuse the things
+- `tests/test_walker.py` (25) — does it find the right files on disk?
+- `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (128) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (152) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
-- `tests/test_ignorefile.py` (8 functions, 11 cases) — is `.snakepruneignore`
-  parsed exactly, and are entries it cannot interpret refused?
+- `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
+  parsed exactly, are entries it cannot interpret refused, and is an ignore
+  file above the results directory found?
 - `tests/test_report.py` (9) — does the on-disk orphan list return exactly
   what was written, and do the summary and wildcard report count correctly?
 
@@ -127,9 +128,10 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
 
 ### Final-review fixes
 
-- Scanning the workflow directory itself may only be a dry run: `--delete` and
-  `--trash` are refused (exit 3) unless `--allow-basename-mismatch` is passed
+- Scanning the workflow directory itself is refused (exit 3), a dry run
+  included, unless `--allow-basename-mismatch` is passed
   (`test_cli_delete_refused_when_results_dir_is_workdir`,
+  `test_cli_dry_run_refuses_scanning_the_workdir`,
   `test_cli_delete_workdir_allowed_with_override`).
 - A file is live if it matches under the workdir-relative prefix *or* the
   results-dir basename, so running `snakemake` from a directory snakeprune does
@@ -143,19 +145,22 @@ Round 2 of review fixes closed several more silent-false-orphan paths:
   `test_cli_scan_delete_ambiguous_flag_deletes_them`,
   `test_cli_scan_ambiguous_orphan_is_held_back_from_trash`,
   `test_cli_scan_constrained_wildcard_orphan_is_not_ambiguous`).
-- Deletion is refused while `.snakemake/locks` in the working directory is
-  non-empty, unless `--allow-locked`; an empty locks directory does not block
+- The scan (dry run included) is refused while `.snakemake/locks` in the
+  working directory is non-empty, unless `--allow-locked`; an empty locks
+  directory does not block
   (`test_cli_scan_delete_refuses_while_snakemake_locks_exist`,
+  `test_cli_dry_run_refuses_while_snakemake_locks_exist`,
   `test_cli_scan_empty_locks_directory_does_not_block`,
   `test_cli_scan_locks_are_checked_in_the_directory_option_workdir`).
-- Deletion is refused for the filesystem root
-  (`test_cli_scan_delete_refuses_filesystem_root`).
-- A `workdir:` directive is read (never created or entered) and `--directory`
-  overrides it; nested results directories and leading `..` paths resolve
-  against it (`test_cli_scan_honours_workdir_directive_for_nested_results`,
+- The filesystem root is refused, dry run included
+  (`test_cli_scan_delete_refuses_filesystem_root`,
+  `test_cli_dry_run_refuses_filesystem_root`).
+- A `workdir:` directive is honoured as Snakemake honours it, and
+  `--directory` overrides it; nested results directories and leading `..`
+  paths resolve against it (`test_cli_scan_honours_workdir_directive_for_nested_results`,
   `test_cli_scan_workdir_directive_resolves_leading_dotdot`,
-  `test_cli_scan_workdir_directive_is_not_created`,
-  `test_cli_scan_directory_option_sets_workdir`).
+  `test_cli_scan_directory_option_sets_workdir`; see also *Fable review
+  fixes* below).
 - Names stored decomposed on disk match composed rule text and `--ignore` globs
   (`test_cli_scan_matches_decomposed_unicode_names_on_disk`,
   `test_cli_scan_ignore_glob_matches_decomposed_unicode_names`), including
@@ -217,8 +222,9 @@ genuinely mean it.
 2. **The "naughty directory" guard.** If you point at a directory whose name is
    a conventional Snakemake *input/config* location — `resources`, `config`,
    `profile`, `workflow`, `.snakemake`, or any name you add with
-   `--naughty-dir` — snakeprune warns on a dry-run and *refuses to delete*
-   (exit 3) unless you pass `--allow-naughty-dir`. The refusal happens before
+   `--naughty-dir` — snakeprune warns and refuses (exit 3), a dry run
+   included, unless you pass `--allow-naughty-dir`
+   (`test_cli_dry_run_refuses_naughty_dir_unless_allowed`). The refusal happens before
    the workflow is even loaded, so a fat-fingered `config` target can't get
    anywhere near a deletion.
 
@@ -234,8 +240,12 @@ genuinely mean it.
 
 5. **The high-orphan-rate guard.** If more than a threshold fraction (default
    50%) of scanned files come back as orphans, that is a red flag for a config
-   or environment problem rather than real cleanup. snakeprune warns always and
-   *refuses to delete* unless you pass `--allow-high-orphan-rate`. The threshold
+   or environment problem rather than real cleanup. snakeprune warns and
+   refuses, a dry run included, unless you pass `--allow-high-orphan-rate`
+   (`test_cli_scan_warns_and_refuses_when_orphan_rate_high`,
+   `test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout`). Files kept
+   only as inputs are left out of the rate
+   (`test_cli_orphan_rate_ignores_files_kept_only_as_inputs`). The threshold
    is configurable, the empty-directory case is handled without a divide-by-zero,
    and setting the threshold to 1.0 disables it — all tested.
 
@@ -291,9 +301,17 @@ genuinely mean it.
    `test_cli_scan_trash_equal_to_results_dir_refuses`).
 
 12. **Partial deletion is reported honestly.** If a batch fails part-way,
-   snakeprune stops, reports how many files were removed, and exits 5
+   snakeprune stops, reports how many files were removed (or moved, with
+   `--trash`), and exits 5 — including when the orphan list cannot be read
+   back mid-batch; a failure while the batch is still being checked exits 3
+   and says nothing was deleted
    (`test_delete_orphans_mid_batch_failure_reports_progress`,
-   `test_cli_scan_delete_partial_failure_exits_5_with_count`).
+   `test_cli_scan_delete_partial_failure_exits_5_with_count`,
+   `test_delete_orphans_read_failure_mid_action_reports_progress`,
+   `test_delete_orphans_read_failure_during_validation_is_plain_oserror`,
+   `test_delete_orphans_trash_failure_message_says_moved`,
+   `test_cli_scan_spool_read_failure_before_deleting_says_nothing_deleted`,
+   `test_cli_scan_spool_read_failure_mid_trash_reports_count_and_verb`).
 
 13. **`--summary` never deletes and never writes paths to stdout.** Combined
    with `--delete` or `--trash` it is refused (exit 3) and nothing is touched,
@@ -328,13 +346,13 @@ genuinely mean it.
    orphan (`test_cli_ignore_file_itself_is_never_an_orphan`); a directory entry
    that does not exist refuses the scan
    (`test_cli_ignore_file_missing_directory_is_refused`); a glob that matched
-   nothing refuses deletion
-   (`test_cli_ignore_file_unmatched_glob_warns_then_refuses_delete`); `!`
+   nothing refuses the run, dry run included
+   (`test_cli_ignore_file_unmatched_glob_warns_and_refuses`); `!`
    negation is refused (`test_cli_ignore_file_negation_is_refused`). It cannot
    be bypassed by scanning a subdirectory
    (`test_cli_ignore_file_in_parent_refuses_deleting_a_subdirectory`) or
    misplaced in a subdirectory
-   (`test_cli_nested_ignore_file_is_not_an_orphan_and_refuses_delete`), and an
+   (`test_cli_nested_ignore_file_is_not_an_orphan_and_refuses`), and an
    existing directory is protected literally even if its name has glob
    characters or the entry lacks a trailing `/`
    (`test_cli_ignore_file_protects_glob_named_and_slashless_directories`).
@@ -355,6 +373,81 @@ genuinely mean it.
    matching stays fast with tens of thousands of expanded inputs
    (`test_input_matcher_scales_to_tens_of_thousands_of_inputs`).
 
+### Fable review fixes
+
+Nine findings from an external review, each pinned by a test that failed
+before its fix:
+
+- **`workdir:` honoured while parsing.** The Snakefile is parsed as `snakemake`
+  would parse it, so parse-time `os.path.abspath(...)` under `workdir: "run"`
+  resolves inside `run/`; the reported workdir is where parsing leaves the
+  process, and a directive naming a missing directory is refused (exit 4),
+  never created (`test_cli_workdir_directive_is_honoured_while_the_snakefile_is_parsed`,
+  `test_cli_missing_workdir_directive_target_is_refused_not_created`,
+  `test_extract_workflow_reports_the_directory_snakemake_ends_up_in`,
+  `test_extract_workflow_follows_a_chdir_made_while_parsing`,
+  `test_extract_workflow_relative_pipeline_dir_and_configfile`). An absolute
+  output that may name files in the results tree but cannot be matched is
+  refused instead of dropped, while one plainly elsewhere is still dropped
+  with a warning, and one in another letter case is mapped
+  (`test_absolute_output_with_wildcard_above_results_dir_is_refused`,
+  `test_absolute_directory_output_containing_results_dir_is_refused`,
+  `test_absolute_output_outside_results_dir_is_still_dropped_with_warning`,
+  `test_absolute_output_differing_only_in_case_is_mapped_under_results_dir`).
+- **Nested ignore files cannot hide.** The walker reports every entry named
+  like the ignore file, in any letter case and of any type, before its
+  symlink, exclude and glob filters; the CLI refuses for each one other than
+  the loaded top-level file
+  (`test_iter_results_files_reports_watched_name_of_any_type_and_case`,
+  `test_cli_nested_ignore_file_symlink_refuses`,
+  `test_cli_nested_ignore_file_broken_symlink_refuses`,
+  `test_cli_nested_ignore_file_hidden_by_ignore_glob_refuses`,
+  `test_cli_nested_ignore_directory_name_refuses`,
+  `test_cli_nested_ignore_file_case_variant_refuses`,
+  `test_cli_top_level_ignore_file_case_variant_is_honoured_not_listed`,
+  `test_cli_second_top_level_ignore_file_variant_refuses` — the last two
+  skip on case-sensitive and case-insensitive filesystems respectively).
+- **Wildcard constraints are a union over the outputs.** Every output, log,
+  benchmark and input of a rule accepts, for each wildcard, the union of its
+  constraints over the rule's outputs, as Snakemake formats every path with
+  the job's values (`test_input_wildcard_accepts_union_of_output_constraints`,
+  `test_every_output_accepts_union_of_output_constraints`,
+  `test_output_union_of_two_constraints_is_alternation`,
+  `test_output_union_keeps_constraint_that_spans_slash_in_strict_build`,
+  `test_single_constraint_regex_is_unchanged`,
+  `test_cli_inputs_and_outputs_take_union_of_output_constraints`,
+  `test_cli_explainer_names_wildcard_left_free_by_one_output`).
+- **A dry run refuses wherever `--delete` would refuse over live files**,
+  with exit 3 and an empty stdout; `--summary` still prints its table on
+  stderr (`test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout`,
+  `test_cli_summary_refusal_still_prints_table_on_stderr`,
+  `test_cli_dry_run_refuses_while_snakemake_locks_exist`,
+  `test_cli_dry_run_refuses_nested_ignore_file`,
+  `test_cli_dry_run_refuses_unmatched_ignore_glob`,
+  `test_cli_dry_run_refuses_ancestor_ignore_file`,
+  `test_cli_dry_run_refuses_naughty_dir_unless_allowed`,
+  `test_cli_dry_run_refuses_scanning_the_workdir`,
+  `test_cli_dry_run_refuses_filesystem_root`).
+- **Case-variant ignore file names** are recognised everywhere (see the
+  nested-ignore tests above, and `test_ancestor_ignore_file_case_variant_is_found`).
+- **Input-only files do not dilute the orphan rate**
+  (`test_cli_orphan_rate_ignores_files_kept_only_as_inputs`).
+- **Unusable inputs that may lie in the results tree are refused** (exit 4),
+  and those plainly elsewhere are skipped
+  (`test_absolute_input_with_wildcard_above_results_dir_is_refused`,
+  `test_absolute_input_outside_results_dir_is_skipped_silently`,
+  `test_unparseable_input_inside_results_tree_is_refused`,
+  `test_unparseable_input_outside_results_tree_is_skipped`,
+  `test_input_with_unresolvable_dotdot_is_refused`,
+  `test_input_naming_the_working_directory_is_refused`,
+  `test_cli_absolute_input_that_may_lie_in_results_refuses`).
+- **Failure messages tell validation from mid-deletion** (see guard 12).
+- **Ancestor ignore files are found through symlinks**, checking the
+  ancestors of both the lexical and the resolved path
+  (`test_ancestor_ignore_file_found_through_symlinked_directory`,
+  `test_ancestor_ignore_file_found_by_resolved_path`,
+  `test_cli_ancestor_ignore_file_seen_through_symlinked_results_dir`).
+
 ## The headline data-loss invariants
 
 Two tests exist specifically to be the thing you point a sceptic at. They do
@@ -367,7 +460,8 @@ not test a clever edge case; they test the boring promise the tool makes.
   false-positive deletion is the catastrophe worth pinning down.)
 
 - **The deleted set equals the reported set.** Over a nested, multi-rule tree,
-  the dry-run lists exactly the orphans and no live file; then a real `--delete`
+  the dry-run lists exactly the orphans and no live file (and, where
+  `--delete` would refuse, the dry run refuses too and lists nothing); then a real `--delete`
   is run and the *surviving* tree is asserted to equal the live set exactly.
   This proves two things at once: nothing that was reported as live was touched,
   and nothing that was reported as an orphan survived. There are no surprise
@@ -389,9 +483,16 @@ Two further tests pin the quiet, boring cases that a careful operator relies on:
 Trust comes from knowing the edges, so here are the gaps that remain:
 
 - **Case-insensitive filesystems** (e.g. default macOS) and **dotfiles**: the
-  matcher is case-sensitive and the walker includes dotfiles; only the
-  `--exclude-dir` spelling check has a dedicated test, so the rest is by
-  inspection rather than by proof.
+  matcher is case-sensitive and the walker includes dotfiles. The
+  `--exclude-dir` spelling check, the ignore file's name, and absolute rule
+  paths in another letter case have dedicated tests; the rest is by
+  inspection rather than by proof. Some ignore-file case tests can only run
+  on one kind of filesystem and skip on the other.
+- **Absolute rule paths with a wildcard above the results directory** are
+  refused from their literal text alone, so a workflow writing to
+  `/home/{user}/...` is refused when the results directory is under
+  `/home`, even though a strict wildcard could not actually reach it. This
+  errs towards refusing and is tested only in that direction.
 
 None of these are believed to cause silent data loss today, but they are the
 honest next targets if you want the suite to be airtight.
