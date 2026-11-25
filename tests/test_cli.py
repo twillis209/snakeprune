@@ -2934,3 +2934,76 @@ def test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links(
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
     assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+# --- Round 4: aliasing through a symlink in the literal part of a rule path.
+
+def _two_rules(make_pipeline, live_rule_out, alias_out):
+    return make_pipeline(
+        "rule a:\n"
+        f"    output: '{live_rule_out}'\n"
+        "    shell: 'touch {output}'\n"
+        "rule b:\n"
+        f"    output: '{alias_out}'\n"
+        "    shell: 'touch {output}'\n"
+    )
+
+
+def _fill(results, extra=()):
+    results.mkdir(parents=True, exist_ok=True)
+    for name in [*_LIVE, *extra, "junk.csv"]:
+        p = results / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+
+
+def test_alias_2_symlink_to_other_letter_case_of_results(make_pipeline):
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", "ra/live.dat")
+    results = pipeline / "results"
+    _fill(results, ["live.dat"])
+    if not (pipeline / "RESULTS").exists():
+        pytest.skip("case-sensitive filesystem")
+    (pipeline / "ra").symlink_to("RESULTS")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_alias_3_two_hop_symlink_chain(make_pipeline, tmp_path):
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", "ext/back/live.dat")
+    results = pipeline / "results"
+    _fill(results, ["live.dat"])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (pipeline / "ext").symlink_to(outside)
+    (outside / "back").symlink_to(results)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_alias_4_symlink_under_dot_snakemake(make_pipeline):
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", ".snakemake/x/live.dat")
+    results = pipeline / "results"
+    _fill(results, ["live.dat"])
+    (pipeline / ".snakemake").mkdir()
+    (pipeline / ".snakemake" / "x").symlink_to("../results")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_alias_6_symlinked_workdir_and_leading_dotdot(make_pipeline, tmp_path):
+    # `..` from links/proj is real/deep, as the OS applies it.
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", "../results/live.dat")
+    real = tmp_path / "real" / "deep" / "proj"
+    real.mkdir(parents=True)
+    results = tmp_path / "real" / "deep" / "results"
+    _fill(results, ["live.dat"])
+    (tmp_path / "links").mkdir()
+    (tmp_path / "links" / "proj").symlink_to(real)
+    result = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "-d", str(tmp_path / "links" / "proj")]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]

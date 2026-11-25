@@ -1073,9 +1073,14 @@ def test_absolute_output_with_wildcard_above_results_dir_is_refused():
         _build(outputs=["/data/{proj}/results/{s}.txt"])
 
 
-def test_absolute_directory_output_containing_results_dir_is_refused():
-    with pytest.raises(_PatternError):
-        _build(outputs=["/data/p1"], directories=["/data/p1"])
+def test_absolute_directory_output_containing_results_dir_is_refused(tmp_path):
+    # Holds even with the wildcard override: every file there would be live.
+    (tmp_path / "p1" / "results").mkdir(parents=True)
+    spec = RuleSpec(name="r", outputs=[str(tmp_path / "p1")], constraints={},
+                    directories=[str(tmp_path / "p1")])
+    with pytest.raises(_PatternError, match="contains the scanned results"):
+        _brp([spec], tmp_path, results_dir=tmp_path / "p1" / "results",
+             match_prefix="results/", allow_wildcard_absolute=True)
 
 
 def test_absolute_output_outside_results_dir_is_still_dropped_with_warning():
@@ -1100,13 +1105,16 @@ def test_absolute_output_in_another_case_is_mapped_when_the_filesystem_agrees(tm
     assert [rx.pattern for _, rx in pats] == [r"^results/(?P<s>[^/]+)\.txt$"]
 
 
-def test_absolute_output_in_another_case_is_not_mapped_when_spellings_differ(
-    tmp_path, monkeypatch
-):
-    # On a case-sensitive filesystem `/x/PROJ/Results` is another directory;
-    # mapping it would make the "no rule writes here" guard pass wrongly.
-    results, spec = _case_variant_setup(tmp_path)
-    monkeypatch.setattr("snakeprune.patterns.os.path.samefile", lambda a, b: False)
+def test_absolute_output_in_another_spelling_of_another_directory_is_not_mapped(tmp_path):
+    # Placement is by identity: a path whose spelling resembles the results
+    # dir but names another directory (as `/x/PROJ/Results` does on a
+    # case-sensitive filesystem) is not mapped, so the "no rule writes here"
+    # guard cannot pass on it.
+    results = tmp_path / "proj" / "results"
+    results.mkdir(parents=True)
+    (tmp_path / "proj2" / "results").mkdir(parents=True)
+    spec = RuleSpec(name="r", outputs=[str(tmp_path / "proj2" / "results") + "/{s}.txt"],
+                    constraints={})
     warnings: list[str] = []
     # Not mapped, so it is an absolute wildcard path outside the results
     # dir, which is refused.
@@ -1140,9 +1148,12 @@ def test_input_with_unresolvable_dotdot_is_refused():
         _build(outputs=["results/{s}.txt"], inputs=["resources/{s}/../../results/x.in"])
 
 
-def test_input_naming_the_working_directory_is_refused():
+def test_input_naming_the_working_directory_is_refused(tmp_path):
+    (tmp_path / "results").mkdir()
+    spec = RuleSpec(name="r", outputs=["results/{s}.txt"], constraints={}, inputs=["."])
     with pytest.raises(_PatternError):
-        _build(outputs=["results/{s}.txt"], inputs=["."])
+        build_input_patterns([spec], tmp_path, results_dir=tmp_path / "results",
+                             match_prefix="results/")
 
 
 def test_extract_workflow_reports_the_directory_snakemake_ends_up_in(make_pipeline):
