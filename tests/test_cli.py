@@ -3037,3 +3037,39 @@ def test_alias_6_symlinked_workdir_and_leading_dotdot(make_pipeline, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_alias_scan_only_covers_wildcard_prefixes_outside_results(make_pipeline):
+    # `latest -> .` in the workdir is reachable by no rule path: every
+    # pattern's literal prefix is inside results, so it is not an alias.
+    pipeline = _alias_pipeline(make_pipeline)
+    results = pipeline / "results"
+    _fill(results)
+    (pipeline / "latest").symlink_to(".")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_alias_scan_by_real_path_of_symlinked_results_dir(make_pipeline, tmp_path):
+    # proj/results -> /scratch/results, scanned by its real path.
+    pipeline = _alias_pipeline(make_pipeline)
+    real = tmp_path / "scratch" / "results"
+    _fill(real)
+    (pipeline / "results").symlink_to(real)
+    result = runner.invoke(app, ["scan", str(pipeline), str(real)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(real / "junk.csv")]
+
+
+def test_alias_link_below_a_wildcard_prefix_outside_results_refuses(make_pipeline):
+    # `data/{x}/live.dat` with x=l names results/live.dat through data/l.
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", "data/{x}/live.dat")
+    results = pipeline / "results"
+    _fill(results, ["live.dat"])
+    (pipeline / "data").mkdir()
+    (pipeline / "data" / "l").symlink_to(results)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 3, result.output
+    assert result.stdout == ""
+    assert "data/l" in result.stderr and "--allow-results-aliases" in result.stderr
