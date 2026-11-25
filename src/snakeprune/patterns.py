@@ -666,11 +666,17 @@ def _place_rule_path(
                 f"working directory, so every file there would be live. "
                 f"Refusing to scan it."
             )
-    if loc is not None and loc.kind == "ancestor" and contains:
+    if (
+        loc is not None and loc.kind == "ancestor" and contains
+        and (absolute or leaves or not norm)
+    ):
         # A directory output or an input covers everything beneath it, so
         # with its literal part above the results dir it may cover the whole
-        # tree. Dropping it would unprotect every file there, not just the
-        # ones one path names, so the override does not apply.
+        # tree. Such a path that cannot be matched under its own spelling
+        # (absolute, leaving the workdir, or the workdir itself) would be
+        # dropped, unprotecting every file there, not just the ones one path
+        # names, so the override does not apply. A relative one inside the
+        # workdir is matched under its own spelling and needs no refusal.
         raise PatternError(
             f"{what} is {'an input' if is_input else 'a directory() output'} "
             f"whose literal part `{loc.resolved}` contains the scanned "

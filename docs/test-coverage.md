@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **366 tests**, split across six files:
+As of this writing the suite is **367 tests**, split across six files:
 
 - `tests/test_patterns.py` (113) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (182) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (183) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore
@@ -518,9 +518,12 @@ one mechanism.
   `test_cli_symlinked_ancestor_on_the_way_in_is_not_an_alias`,
   `test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links`).
 - **Follow-ups.** A directory output or input whose literal part is above
-  the results dir refuses whatever its wildcards or flags
-  (`test_directory_output_with_wildcard_above_results_refuses_even_with_override`,
-  `test_input_with_wildcard_whose_prefix_is_above_results_refuses`), and
+  the results dir, and which cannot be matched under its own spelling
+  (absolute, or leaving the workdir), refuses whatever its wildcards or
+  flags (`test_directory_output_with_wildcard_above_results_refuses_even_with_override`,
+  `test_absolute_input_with_wildcard_whose_prefix_is_above_results_refuses`);
+  a relative one inside the workdir is matched as written and still protects
+  what it covers (`test_relative_root_wildcard_input_and_directory_are_matched_not_refused`); and
   on-disk names spliced into re-rooted patterns keep their braces literal
   (`test_rerooted_on_disk_name_with_braces_stays_literal`,
   `test_doubled_braces_are_literal_braces`,
