@@ -642,11 +642,18 @@ def _place_rule_path(
                 f"working directory, so every file there would be live. "
                 f"Refusing to scan it."
             )
-    if loc is not None and loc.kind == "ancestor" and not loc.has_wildcard and contains:
+    if loc is not None and loc.kind == "ancestor" and contains:
+        # A directory output or an input covers everything beneath it, so
+        # with its literal part above the results dir it may cover the whole
+        # tree. Dropping it would unprotect every file there, not just the
+        # ones one path names, so the override does not apply.
         raise PatternError(
-            f"{what} names `{loc.resolved}`, which contains the scanned "
-            f"results directory `{results_dir}`, so every file there may be "
-            f"live. Refusing to scan it."
+            f"{what} is {'an input' if is_input else 'a directory() output'} "
+            f"whose literal part `{loc.resolved}` contains the scanned "
+            f"results directory `{results_dir}`, so it may cover every file "
+            f"there. Refusing to scan it. {WILDCARD_ABSOLUTE_FLAG} does not "
+            f"apply: it drops one path at a time, and dropping this one would "
+            f"leave the whole tree unprotected."
         )
     if not absolute and not leaves:
         if norm:

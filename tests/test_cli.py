@@ -3073,3 +3073,47 @@ def test_alias_link_below_a_wildcard_prefix_outside_results_refuses(make_pipelin
     assert result.exit_code == 3, result.output
     assert result.stdout == ""
     assert "data/l" in result.stderr and "--allow-results-aliases" in result.stderr
+
+
+@pytest.mark.parametrize("spelling", ["absolute", "relative"])
+def test_directory_output_with_wildcard_above_results_refuses_even_with_override(
+    make_pipeline, spelling
+):
+    # directory("<workdir>/{x}") with x=results covers the whole tree; if it
+    # were dropped, results/live.dat would be listed and deleted.
+    pipeline = make_pipeline("")
+    out = f"{pipeline}/{{x}}" if spelling == "absolute" else "{x}"
+    (pipeline / "Snakefile").write_text(
+        "rule keep:\n"
+        "    output: 'results/keep.txt'\n"
+        "    shell: 'touch {output}'\n"
+        "rule d:\n"
+        f"    output: directory('{out}')\n"
+        "    shell: 'mkdir -p {output}'\n"
+    )
+    results = pipeline / "results"
+    results.mkdir()
+    for name in ["keep.txt", "live.dat"]:
+        (results / name).touch()
+    result = runner.invoke(
+        app,
+        ["scan", str(pipeline), str(results), "--allow-wildcard-absolute-paths",
+         "--allow-high-orphan-rate"],
+    )
+    assert result.exit_code == 4, result.output
+    assert result.stdout == ""
+    assert "--allow-wildcard-absolute-paths does not apply" in result.stderr
+
+
+def test_input_with_wildcard_whose_prefix_is_above_results_refuses(make_pipeline):
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    input: '{x}'\n"
+        "    output: 'results/{x}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = pipeline / "results"
+    _fill(results)
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 4, result.output
+    assert "contains the scanned results directory" in result.stderr
