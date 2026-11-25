@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **351 tests**, split across six files:
+As of this writing the suite is **360 tests**, split across six files:
 
 - `tests/test_patterns.py` (111) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (169) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (178) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore
@@ -417,7 +417,7 @@ before its fix:
   `test_cli_absolute_output_with_wildcard_dir_through_symlink_refuses`,
   `test_cli_absolute_input_with_wildcard_dir_has_an_override`,
   `test_absolute_output_in_another_case_is_mapped_when_the_filesystem_agrees`,
-  `test_absolute_output_in_another_case_is_not_mapped_when_spellings_differ`).
+  `test_absolute_output_in_another_spelling_of_another_directory_is_not_mapped`).
 - **Nested ignore files cannot hide.** The walker reports every entry named
   like the ignore file, in any letter case and of any type, before its
   symlink, exclude and glob filters; the CLI refuses for each one other than
@@ -482,19 +482,44 @@ before its fix:
   `test_ancestor_ignore_file_found_by_resolved_path`,
   `test_cli_ancestor_ignore_file_seen_through_symlinked_results_dir`).
 
-### Round-3 fixes: symlink aliasing
+### Round-4: one mechanism for symlink aliasing
 
-A symlink in the working directory that leads into, onto or above the
-results tree lets a relative rule path name a results file under another
-spelling (`pa -> .` with output `p{x}/results/live.dat`). The workdir is
-scanned for such links before the walk, never following them and skipping
-the results tree and `.snakemake/`; any hit refuses (exit 3, dry run
-included) unless `--allow-results-aliases`. The results dir as given, and
-its lexical ancestors, are exempt, and broken links are ignored
-(`test_cli_symlink_in_workdir_aliasing_results_refuses`,
-`test_cli_results_dir_given_through_a_symlink_is_not_an_alias`,
-`test_cli_symlinked_ancestor_on_the_way_in_is_not_an_alias`,
-`test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links`).
+Earlier rounds patched aliasing case by case; round 4 replaced that with
+one mechanism.
+
+- **Literal prefixes are placed by identity.** Every rule path's literal
+  part is joined to the real workdir, realpath'd (following multi-hop
+  chains), and compared with the results dir and its ancestors by
+  `(st_dev, st_ino)`. If it lands in the tree, the path is matched re-rooted
+  there as well as under its own spelling. Lookups are cached per distinct
+  directory (a literal file costs one `lstat` beyond its directory). The
+  six reproduced routes are regression tests that failed before the change:
+  `test_alias_1_symlink_inside_results_in_literal_prefix`,
+  `test_alias_2_symlink_to_other_letter_case_of_results` (skips on a
+  case-sensitive filesystem), `test_alias_3_two_hop_symlink_chain`,
+  `test_alias_4_symlink_under_dot_snakemake`,
+  `test_alias_5_workdir_is_results_dir`,
+  `test_alias_6_symlinked_workdir_and_leading_dotdot`. A literal directory
+  output naming an ancestor of the results dir refuses even with the
+  wildcard override (`test_absolute_directory_output_containing_results_dir_is_refused`),
+  and another directory with a similar spelling is never mapped
+  (`test_absolute_output_in_another_spelling_of_another_directory_is_not_mapped`).
+- **Symlinked directories inside the tree** that lead into, onto or above
+  it refuse unless `--allow-results-aliases` (tests 1 and 5 above).
+- **Links a wildcard can pass through outside the tree** are looked for
+  only under the resolved literal prefixes of relative wildcard paths that
+  start outside the tree
+  (`test_alias_link_below_a_wildcard_prefix_outside_results_refuses`,
+  `test_cli_symlink_in_workdir_aliasing_results_refuses`), so unreachable
+  links and a results dir scanned by its real path no longer refuse
+  (`test_alias_scan_only_covers_wildcard_prefixes_outside_results`,
+  `test_alias_scan_by_real_path_of_symlinked_results_dir`,
+  `test_cli_results_dir_given_through_a_symlink_is_not_an_alias`,
+  `test_cli_symlinked_ancestor_on_the_way_in_is_not_an_alias`,
+  `test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links`).
+- **Unsupported, and untested by design:** a wildcard-matched link whose
+  chain leaves and re-enters the tree through a directory outside every
+  scanned prefix; hard links.
 
 ## The headline data-loss invariants
 
