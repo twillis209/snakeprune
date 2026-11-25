@@ -3117,3 +3117,15 @@ def test_input_with_wildcard_whose_prefix_is_above_results_refuses(make_pipeline
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 4, result.output
     assert "contains the scanned results directory" in result.stderr
+
+
+def test_rerooted_on_disk_name_with_braces_stays_literal(make_pipeline):
+    # br -> results/s{x}: output br/{x}.out re-rooted must be
+    # results/s{{x}}/{x}.out, not a pattern where s{x} is a wildcard.
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", "br/{x}.out")
+    results = pipeline / "results"
+    _fill(results, ["s{x}/q.out"])
+    (pipeline / "br").symlink_to(results / "s{x}")
+    result = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.split() == [str(results / "junk.csv")]

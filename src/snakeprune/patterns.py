@@ -61,24 +61,40 @@ def wildcard_pattern_to_regex(
     `overrides[wildcard]`, when given, is used in place of all of the above
     (see `rule_wildcard_bodies`).
 
-    Raises `PatternError` if any `{` or `}` survives in a literal segment.
+    A doubled brace (`{{`, `}}`) is a literal brace, as in Snakemake; it is
+    how on-disk names are spliced in (see `escape_braces`). Raises
+    `PatternError` for any other `{` or `}` outside a wildcard.
     """
     parts: list[str] = []
-    cursor = 0
+    literal: list[str] = []
     seen: set[str] = set()
 
-    def _literal(text: str) -> str:
-        if "{" in text or "}" in text:
-            raise PatternError(
-                f"Cannot parse wildcard syntax in rule path `{pattern}` "
-                f"(unexpected brace in `{text}`). snakeprune refuses to "
-                f"guess: an unparsed pattern would mark every file of this "
-                f"rule as an orphan."
-            )
-        return re.escape(text)
+    def unparsed(at: int) -> PatternError:
+        return PatternError(
+            f"Cannot parse wildcard syntax in rule path `{pattern}` "
+            f"(unexpected brace at `{pattern[at:at + 20]}`). snakeprune "
+            f"refuses to guess: an unparsed pattern would mark every file of "
+            f"this rule as an orphan."
+        )
 
-    for match in _WILDCARD_RE.finditer(pattern):
-        parts.append(_literal(pattern[cursor : match.start()]))
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("{{", i) or pattern.startswith("}}", i):
+            literal.append(pattern[i])  # a doubled brace is a literal one
+            i += 2
+            continue
+        ch = pattern[i]
+        if ch == "}":
+            raise unparsed(i)
+        if ch != "{":
+            literal.append(ch)
+            i += 1
+            continue
+        match = _WILDCARD_RE.match(pattern, i)
+        if match is None:
+            raise unparsed(i)
+        parts.append(re.escape("".join(literal)))
+        literal = []
         name = match.group("name")
         if name in seen:
             parts.append(f"(?P={name})")
@@ -90,8 +106,8 @@ def wildcard_pattern_to_regex(
                 body = inline if inline else constraints.get(name, default)
             parts.append(f"(?P<{name}>{body})")
             seen.add(name)
-        cursor = match.end()
-    parts.append(_literal(pattern[cursor:]))
+        i = match.end()
+    parts.append(re.escape("".join(literal)))
     suffix = r"(?:/.*)?" if is_directory else ""
     return "^" + "".join(parts) + suffix + "$"
 
@@ -388,6 +404,11 @@ def results_match_prefix(
     return nfc(results_dir_name(results_dir)) + "/"
 
 
+def escape_braces(text: str) -> str:
+    """`text` with each brace doubled, so a pattern reads it literally."""
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _ident(path: str) -> tuple[int, int] | None:
     """`(st_dev, st_ino)` of `path` (following symlinks), or None."""
     try:
@@ -628,14 +649,17 @@ def _place_rule_path(
     spellings: list[str] = []
     loc = resolver.locate(path) if resolver is not None else None
     if loc is not None and loc.kind == "inside":
-        tail = "/".join(x for x in (loc.rel, loc.remaining) if x)
+        # On-disk names (the results dir's place and the prefix below it)
+        # are literal text: escape any braces before splicing them in.
+        tail = "/".join(x for x in (escape_braces(loc.rel), loc.remaining) if x)
+        root = escape_braces(match_prefix)
         if tail:
-            rerooted, bad = normalise_rule_path(match_prefix + tail)
+            rerooted, bad = normalise_rule_path(root + tail)
             if bad:
                 raise dotdot_error()
             spellings.append(rerooted)
-        elif match_prefix:
-            spellings.append(match_prefix.rstrip("/"))
+        elif root:
+            spellings.append(root.rstrip("/"))
         else:
             raise PatternError(
                 f"{what} names the results directory itself, which is the "
@@ -847,7 +871,9 @@ class InputMatcher:
         overrides: dict[str, str] | None = None,
     ) -> None:
         last = _split_outside_wildcards(path)[-1]
-        if _WILDCARD_RE.search(last) is None:
+        # Bucket only a final segment with no brace at all: a doubled
+        # (literal) brace would make the bucket key differ from the name.
+        if "{" not in last and "}" not in last:
             rx = re.compile(wildcard_pattern_to_regex(
                 path, constraints, default=default, overrides=overrides,
             ))

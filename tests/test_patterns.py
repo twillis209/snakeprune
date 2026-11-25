@@ -1275,3 +1275,19 @@ def test_find_rule_patterns_accepts_the_wildcard_absolute_override(make_pipeline
         allow_wildcard_absolute=True,
     )
     assert [n for n, _ in patterns] == ["b"] and len(warnings) == 1
+
+
+def test_doubled_braces_are_literal_braces():
+    rx = _re_module.compile(wildcard_pattern_to_regex("results/s{{x}}/{x}.out", {}))
+    m = rx.match("results/s{x}/q.out")
+    assert m and m.group("x") == "q"
+    assert not rx.match("results/sq/q.out")
+
+
+def test_input_matcher_literal_name_with_escaped_brace_matches_on_disk_name():
+    from snakeprune.patterns import InputMatcher
+
+    m = InputMatcher()
+    m._add("r", "results/q{{.out", {}, r"[^/]+")
+    m._finish()
+    assert m.match("results/q{.out")
