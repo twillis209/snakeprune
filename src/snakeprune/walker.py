@@ -111,6 +111,9 @@ def iter_results_files(
     watched: list[tuple[str, str]] = []
     if stats is not None and watch_key is not None:
         stats["watched"] = watched
+    # A caller that seeds stats["symlinked_dir_paths"] with a list gets the
+    # path of every skipped symlinked directory appended to it.
+    dir_links = stats.get("symlinked_dir_paths") if stats is not None else None
     if stats is not None:
         stats["skipped_symlinked_dirs"] = 0
         stats["excluded_dirs"] = 0
@@ -148,6 +151,8 @@ def iter_results_files(
                         # either mode; count them so the CLI can tell the user.
                         if stats is not None:
                             stats["skipped_symlinked_dirs"] += 1
+                            if dir_links is not None:
+                                dir_links.append(entry.path)
                         continue
                     if not follow_symlinks:
                         continue

@@ -11,6 +11,7 @@ import typer
 from snakeprune.delete import DeletionFailed, delete_orphans, validate_orphans
 from snakeprune.patterns import (
     DEFAULT_WILDCARD_REGEX,
+    PrefixResolver,
     SNAKEMAKE_WILDCARD_REGEX,
     ExtractorError,
     PatternError,
@@ -547,6 +548,8 @@ def scan(
                 err=True,
             )
             raise typer.Exit(code=3)
+        # One resolver for every build, so each distinct prefix is looked up once.
+        resolver = PrefixResolver(workdir, results_dir)
         patterns = build_rule_patterns(
             extracted.rules,
             workdir,
@@ -555,6 +558,7 @@ def scan(
             results_dir=results_dir,
             match_prefix=match_prefix,
             allow_wildcard_absolute=allow_wildcard_absolute_paths,
+            resolver=resolver,
         )
         input_patterns = build_input_patterns(
             extracted.rules,
@@ -563,6 +567,7 @@ def scan(
             results_dir=results_dir,
             match_prefix=match_prefix,
             allow_wildcard_absolute=allow_wildcard_absolute_paths,
+            resolver=resolver,
             on_warning=lambda msg: typer.echo(msg, err=True),
         )
         if not permissive_wildcards:
@@ -575,6 +580,7 @@ def scan(
                 results_dir=results_dir,
                 match_prefix=match_prefix,
                 allow_wildcard_absolute=allow_wildcard_absolute_paths,
+                resolver=resolver,
             )
             permissive_inputs = build_input_patterns(
                 extracted.rules,
@@ -583,6 +589,7 @@ def scan(
                 results_dir=results_dir,
                 match_prefix=match_prefix,
                 allow_wildcard_absolute=allow_wildcard_absolute_paths,
+                resolver=resolver,
             )
     except SnakefileNotFound as exc:
         typer.echo(str(exc), err=True)
@@ -678,6 +685,8 @@ def scan(
             results_name=results_name,
             log=log,
             ignore_file=ignore_file,
+            resolver=resolver,
+            allow_results_aliases=allow_results_aliases,
         )
     finally:
         spool.close()
@@ -714,6 +723,8 @@ def _scan_and_report(
     results_name: str,
     log,
     ignore_file=None,
+    resolver=None,
+    allow_results_aliases: bool = False,
 ) -> None:
     file_count = 0
     target_prefixes = [match_prefix]
@@ -726,7 +737,7 @@ def _scan_and_report(
         else None
     )
     dir_summary = DirectorySummary(summary_depth) if summary else None
-    walk_stats: dict = {}
+    walk_stats: dict = {"symlinked_dir_paths": []}
     nested_ignore_files: list[str] = []
     kept_as_input = 0
     n_orphans = 0
@@ -818,13 +829,24 @@ def _scan_and_report(
         )
 
     skipped_dirs = walk_stats.get("skipped_symlinked_dirs", 0)
+    # A symlinked directory inside the tree that leads back into, onto or
+    # above it lets a wildcard value name a results file by another path.
+    dir_links = [(p, os.path.realpath(p)) for p in walk_stats["symlinked_dir_paths"]]
+    tree_aliases = [
+        (p, t) for p, t in dir_links
+        if resolver is not None and resolver.where(t)[0] in ("inside", "ancestor")
+    ]
     if skipped_dirs > 0:
         suffix = "y" if skipped_dirs == 1 else "ies"
         typer.echo(
             f"Skipped {skipped_dirs} symlinked subdirector{suffix}; files "
-            f"reachable only via those paths were not scanned.",
+            f"reachable only via those paths were not scanned:",
             err=True,
         )
+        for link, target in dir_links[:20]:
+            typer.echo(f"  {link} -> {target}", err=True)
+        if len(dir_links) > 20:
+            typer.echo(f"  ... and {len(dir_links) - 20} more", err=True)
 
     excluded_dirs = walk_stats.get("excluded_dirs", 0)
     if excluded_dirs > 0:
@@ -902,6 +924,15 @@ def _scan_and_report(
             refusals.append(
                 f"{refusing}: orphan rate exceeded threshold. Pass "
                 f"--allow-high-orphan-rate to override."
+            )
+        if tree_aliases and not allow_results_aliases:
+            listing = "".join(f"\n  {p} -> {t}" for p, t in tree_aliases[:20])
+            refusals.append(
+                f"{refusing}: these symlinked directories in the results tree "
+                f"lead back into, onto or above it, so a rule path whose "
+                f"wildcard passes through one names a results file by a path "
+                f"snakeprune does not match:{listing}\nPass "
+                f"--allow-results-aliases if no rule path goes through them."
             )
         if n_symlink_candidates:
             refusals.append(

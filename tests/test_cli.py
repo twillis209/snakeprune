@@ -2930,7 +2930,6 @@ def test_cli_alias_guard_ignores_broken_links_snakemake_dir_and_unrelated_links(
     (tmp_path / "ref").mkdir()
     (pipeline / "resources").mkdir()
     (pipeline / "resources" / "ref").symlink_to(tmp_path / "ref")
-    (results / "inner_link").symlink_to(results)  # inside the results tree: skipped
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
     assert result.stdout.split() == [str(results / "junk.csv")]
@@ -2955,6 +2954,23 @@ def _fill(results, extra=()):
         p = results / name
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch()
+
+
+def test_alias_1_symlink_inside_results_in_literal_prefix(make_pipeline):
+    pipeline = _two_rules(make_pipeline, "results/{n}.txt", "results/latest/{x}.out")
+    results = pipeline / "results"
+    _fill(results, ["run1/live.out"])
+    (results / "latest").symlink_to("run1")
+    dry = runner.invoke(app, ["scan", str(pipeline), str(results)])
+    # results/latest is a symlinked directory inside the tree: refused.
+    assert dry.exit_code == 3, dry.output
+    assert dry.stdout == ""
+    assert "latest" in dry.stderr and "--allow-results-aliases" in dry.stderr
+    allowed = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--allow-results-aliases"]
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert allowed.stdout.split() == [str(results / "junk.csv")]
 
 
 def test_alias_2_symlink_to_other_letter_case_of_results(make_pipeline):
@@ -2991,6 +3007,20 @@ def test_alias_4_symlink_under_dot_snakemake(make_pipeline):
     result = runner.invoke(app, ["scan", str(pipeline), str(results)])
     assert result.exit_code == 0, result.output
     assert result.stdout.split() == [str(results / "junk.csv")]
+
+
+def test_alias_5_workdir_is_results_dir(make_pipeline):
+    pipeline = _two_rules(make_pipeline, "{n}.txt", "pa/live.dat")
+    _fill(pipeline, ["live.dat"])
+    (pipeline / "pa").symlink_to(".")
+    args = ["scan", str(pipeline), str(pipeline), "--allow-basename-mismatch",
+            "--ignore", "Snakefile", "--ignore", ".snakemake/**"]
+    dry = runner.invoke(app, args)
+    assert dry.exit_code == 3, dry.output  # pa is a symlinked dir onto the tree
+    assert dry.stdout == ""
+    allowed = runner.invoke(app, [*args, "--allow-results-aliases"])
+    assert allowed.exit_code == 0, allowed.output
+    assert allowed.stdout.split() == [str(pipeline / "junk.csv")]
 
 
 def test_alias_6_symlinked_workdir_and_leading_dotdot(make_pipeline, tmp_path):
