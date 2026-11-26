@@ -36,6 +36,7 @@ from snakeprune.report import (
     DirectorySummary,
     OrphanSelection,
     OrphanSpool,
+    human_size,
 )
 from snakeprune.walker import (
     _compile_globs,
@@ -1023,8 +1024,11 @@ def _scan_and_report(
                     pass
         except OSError as exc:
             raise _spool_failed(exc)
+        what = f"{n_delete} file(s) ({human_size(total_bytes)})"
         typer.echo(
-            f"About to delete {n_delete} file(s), {total_bytes} byte(s).",
+            f"About to move {what} to the trash at '{trash}'."
+            if trash is not None
+            else f"About to delete {what}.",
             err=True,
         )
         if not yes:

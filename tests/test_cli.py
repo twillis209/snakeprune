@@ -421,6 +421,28 @@ def test_cli_scan_trash_moves_orphan_to_dir(make_pipeline, make_results, tmp_pat
     assert (trash / results.name / "obsolete.csv").exists()
 
 
+def test_cli_confirmation_names_the_action_and_a_readable_size(
+    make_pipeline, make_results, tmp_path
+):
+    # The line before removal says what will happen to the files (moved to
+    # the trash, not deleted) and gives the size as --summary does.
+    pipeline = make_pipeline(_ONE_RULE)
+    results = make_results(_LIVE + ["junk.csv"])
+    (results / "junk.csv").write_bytes(b"x" * (2 * 1024 * 1024))
+    trash = tmp_path / "trash"
+    moved = runner.invoke(
+        app, ["scan", str(pipeline), str(results), "--trash", str(trash), "--yes"]
+    )
+    assert moved.exit_code == 0, moved.output
+    assert f"About to move 1 file(s) (2.0 MB) to the trash at '{trash}'." in moved.stderr
+    assert "About to delete" not in moved.stderr
+
+    (results / "junk.csv").write_bytes(b"x" * 1536)
+    deleted = runner.invoke(app, ["scan", str(pipeline), str(results), "--delete", "--yes"])
+    assert deleted.exit_code == 0, deleted.output
+    assert "About to delete 1 file(s) (1.5 KB)." in deleted.stderr
+
+
 def test_cli_scan_trash_implies_delete_mode(make_pipeline, make_results, tmp_path):
     # User passes --trash but not --delete; deletion should still happen.
     pipeline = make_pipeline(

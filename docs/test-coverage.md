@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **368 tests**, split across six files:
+As of this writing the suite is **369 tests**, split across six files:
 
 - `tests/test_patterns.py` (113) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (184) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (185) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore

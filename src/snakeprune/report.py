@@ -114,7 +114,7 @@ class OrphanSelection:
         return self._spool.count - self._spool.ambiguous_count
 
 
-def _human_size(n: int) -> str:
+def human_size(n: int) -> str:
     if n < 1024:
         return f"{n} B"
     size = float(n)
@@ -165,11 +165,11 @@ class DirectorySummary:
             total.ambiguous += g.ambiguous
             total.size += g.size
             lines.append(
-                f"{g.deletable:>12}  {g.ambiguous:>12}  {_human_size(g.size):>10}  {key}"
+                f"{g.deletable:>12}  {g.ambiguous:>12}  {human_size(g.size):>10}  {key}"
             )
         lines.append(
             f"{total.deletable:>12}  {total.ambiguous:>12}  "
-            f"{_human_size(total.size):>10}  (total)"
+            f"{human_size(total.size):>10}  (total)"
         )
         return lines
 
