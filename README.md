@@ -1,4 +1,4 @@
-# snakeprune
+# snakeprune <img src="docs/logo/hex-v1.svg" align="right" width="140" alt="snakeprune logo"/>
 
 Find 'orphan' files in a `snakemake` project's `results/` directory and delete them.
 
