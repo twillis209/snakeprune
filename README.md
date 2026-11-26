@@ -2,6 +2,8 @@
 
 Find 'orphan' files in a `snakemake` project's `results/` directory and delete them.
 
+![snakeprune finding and trashing orphan files](docs/demo/demo.gif)
+
 ## Motivation
 
 Experimentation in bioinformatics typically entails exploration of an ever-expanding number of parameters, flags, procedures, etc. Encoding these as wildcards in the paths to output files in your `snakemake` rules leads to a growing tree of redundant files under `results`, e.g.
