@@ -1,33 +1,48 @@
 #!/usr/bin/env bash
-# Build the throwaway pipeline that demo.tape records: bash setup.sh DIR
+# Build the throwaway pipeline that make_gif.py records: bash setup.sh DIR
 set -euo pipefail
 d=${1:?usage: setup.sh DIR}
 rm -rf "$d"; mkdir -p "$d"; cd "$d"
 cat > Snakefile <<'SMK'
-SAMPLES = ["A", "B", "C"]
-REPS = ["1", "2"]
+SAMPLES = ["liver_rep1", "liver_rep2", "heart_rep1", "heart_rep2"]
 
 rule all:
     input:
-        expand("results/{sample}/{rep}/tpm/10/{f}",
-               sample=SAMPLES, rep=REPS, f=["counts.tsv", "qc.txt"]),
+        expand("results/counts/{sample}/star/tpm/{f}",
+               sample=SAMPLES, f=["counts.tsv", "qc_metrics.txt"]),
+        "results/diffexp/liver_vs_heart/star/tpm/deseq2_results.tsv",
 
-rule count:
+rule quantify:
     output:
-        "results/{sample}/{rep}/{norm}/{min_count}/counts.tsv",
+        "results/counts/{sample}/{aligner}/{norm}/counts.tsv",
     shell:
         "echo {wildcards} > {output}"
 
 rule qc:
     input:
-        "results/{sample}/{rep}/{norm}/{min_count}/counts.tsv",
+        "results/counts/{sample}/{aligner}/{norm}/counts.tsv",
     output:
-        "results/{sample}/{rep}/{norm}/{min_count}/qc.txt",
+        "results/counts/{sample}/{aligner}/{norm}/qc_metrics.txt",
     shell:
         "wc -l {input} > {output}"
+
+rule diffexp:
+    input:
+        expand("results/counts/{sample}/{{aligner}}/{{norm}}/counts.tsv",
+               sample=SAMPLES),
+    output:
+        "results/diffexp/liver_vs_heart/{aligner}/{norm}/deseq2_results.tsv",
+    shell:
+        "cat {input} > {output}"
 SMK
 snakemake -q -c1 >/dev/null 2>&1
-# Leftovers from earlier iterations of the output layout
-for s in A B; do for r in 1 2; do echo old > "results/$s/$r/counts.tsv"; done; done
-for r in 1 2; do mkdir -p "results/A/$r/cpm"; echo old > "results/A/$r/cpm/counts.tsv"; done
+# Leftovers from earlier iterations of the output layout: before the
+# aligner level, then before the normalisation level.
+# Sizes are realistic so the --summary size column looks like a real run.
+old() { head -c "$1" /dev/zero > "$2"; }
+old 1843200 results/counts/liver_rep1/counts.tsv
+old 1789952 results/counts/liver_rep2/counts.tsv
+old 2117632 results/counts/heart_rep1/star/counts.tsv
+old 2050048 results/counts/heart_rep2/star/counts.tsv
+old 663552 results/diffexp/liver_vs_heart/star/deseq2_results.tsv
 rm -rf .snakemake  # no lock or metadata left to trip the scan

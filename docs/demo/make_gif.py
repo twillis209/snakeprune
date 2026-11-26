@@ -13,7 +13,7 @@ COMMANDS = [
     "snakeprune scan . results --trash trash --yes",
     "snakemake -n",
 ]
-COLS, ROWS, SIZE, PAD = 92, 22, 15, 14
+COLS, ROWS, SIZE, PAD = 136, 24, 14, 14
 BG, FG, DIM, PROMPT, CMD = "#0d1117", "#e6edf3", "#7d8590", "#3fb950", "#ffffff"
 # snakeprune's stderr progress lines, drawn dimmer than the stdout results
 PROGRESS = ("Loading ", "Loaded ", "Walking ", "Scanned ", "About to ", "moving to trash")
