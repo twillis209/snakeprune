@@ -475,7 +475,7 @@ def scan(
         typer.echo(f"Refusing to scan: {exc}", err=True)
         raise typer.Exit(code=3)
 
-    log(f"Loading Snakemake workflow from {pipeline_dir}...")
+    log(f"Loading Snakemake workflow from '{pipeline_dir}'...")
     wildcard_regex = (
         SNAKEMAKE_WILDCARD_REGEX if permissive_wildcards else DEFAULT_WILDCARD_REGEX
     )
@@ -642,7 +642,7 @@ def scan(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=4)
 
-    log(f"Walking {results_dir}...")
+    log(f"Walking '{results_dir}'...")
     # Orphans go to a temporary file, not a list, so memory stays flat on
     # trees with millions of them.
     spool = OrphanSpool()
@@ -934,15 +934,17 @@ def _scan_and_report(
                 f"--follow-symlinks to leave symlinks out."
             )
 
+    if refusals:
+        # A refused scan reports nothing about its orphans, the --summary
+        # table included: it would describe files that may be live.
+        for msg in refusals:
+            typer.echo(msg, err=True)
+        raise typer.Exit(code=3)
     if dir_summary is not None:
         # stderr, not stdout: stdout is reserved for paths that would be
         # deleted, and a directory column piped into `rm -r` would be a disaster.
         for line in dir_summary.render():
             typer.echo(line, err=True)
-    if refusals:
-        for msg in refusals:
-            typer.echo(msg, err=True)
-        raise typer.Exit(code=3)
     if deleting and n_delete:
         # Every check delete_orphans makes before removing anything, run
         # before the list is printed, so a refused batch is never listed.

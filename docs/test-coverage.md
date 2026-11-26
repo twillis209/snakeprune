@@ -6,14 +6,14 @@ exactly what the test suite guarantees and where its edges are. It is honest
 about what is *not* yet covered, because a coverage report that claims
 perfection is less trustworthy than one that names its gaps.
 
-As of this writing the suite is **367 tests**, split across six files:
+As of this writing the suite is **368 tests**, split across six files:
 
 - `tests/test_patterns.py` (113) — does snakeprune correctly understand what a
   Snakemake workflow actually produces?
 - `tests/test_walker.py` (25) — does it find the right files on disk?
 - `tests/test_delete.py` (23) — does the deletion primitive refuse the things
   it should and only remove the things it should?
-- `tests/test_cli.py` (183) — does the whole command-line tool, end to end,
+- `tests/test_cli.py` (184) — does the whole command-line tool, end to end,
   behave safely under every flag combination that matters?
 - `tests/test_ignorefile.py` (11 functions, 14 cases) — is `.snakepruneignore`
   parsed exactly, are entries it cannot interpret refused, and is an ignore
@@ -447,9 +447,9 @@ before its fix:
   `test_log_paths_widen_the_union_since_they_decide_job_wildcards`,
   `test_cli_log_request_decides_wildcards_so_union_includes_logs`).
 - **A dry run refuses wherever `--delete` would refuse over live files**,
-  with exit 3 and an empty stdout; `--summary` still prints its table on
-  stderr (`test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout`,
-  `test_cli_summary_refusal_still_prints_table_on_stderr`,
+  with exit 3 and an empty stdout; a refused `--summary` prints no table
+  either (`test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout`,
+  `test_cli_summary_refusal_prints_no_table`,
   `test_cli_dry_run_refuses_while_snakemake_locks_exist`,
   `test_cli_dry_run_refuses_nested_ignore_file`,
   `test_cli_dry_run_refuses_unmatched_ignore_glob`,

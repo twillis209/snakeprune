@@ -75,6 +75,24 @@ def test_cli_scan_no_snakefile_fails_cleanly(tmp_path):
     assert "Snakefile" in result.stdout or "Snakefile" in (result.stderr or "")
 
 
+def test_cli_progress_quotes_paths_so_dot_is_readable(
+    make_pipeline, make_results, monkeypatch
+):
+    # `snakeprune scan . results` used to log "from ....": the path ran
+    # into the ellipsis. Quoting keeps the path apart from it.
+    pipeline = make_pipeline(
+        "rule a:\n"
+        "    output: 'results/{n}.txt'\n"
+        "    shell: 'touch {output}'\n"
+    )
+    results = make_results(["1.txt"])
+    monkeypatch.chdir(pipeline)
+    result = runner.invoke(app, ["scan", ".", str(results)])
+    assert result.exit_code == 0, result.output
+    assert "Loading Snakemake workflow from '.'..." in result.stderr
+    assert f"Walking '{results}'..." in result.stderr
+
+
 def test_cli_scan_emits_progress_by_default(make_pipeline, make_results):
     pipeline = make_pipeline(
         "rule a:\n"
@@ -2439,13 +2457,17 @@ def test_cli_dry_run_refuses_high_orphan_rate_with_empty_stdout(make_pipeline, m
     ]
 
 
-def test_cli_summary_refusal_still_prints_table_on_stderr(make_pipeline, make_results):
+def test_cli_summary_refusal_prints_no_table(make_pipeline, make_results):
+    # A refused scan reports nothing about the orphans it found, the
+    # --summary table included: like the per-file listing, it describes
+    # files the refusal says may be live.
     pipeline = make_pipeline(_ONE_RULE)
     results = make_results(["1.txt", "old/o1.csv", "old/o2.csv"])
     result = runner.invoke(app, ["scan", str(pipeline), str(results), "--summary"])
     assert result.exit_code == 3, result.output
     assert result.stdout == ""
-    assert "(total)" in result.stderr
+    assert "(total)" not in result.stderr
+    assert "deletable" not in result.stderr
     assert "orphan rate exceeded threshold" in result.stderr
 
 
