@@ -11,15 +11,21 @@ Experimentation in bioinformatics typically entails exploration of an ever-expan
 * `results/{sample}/{replicate}/{normalisation}/output.txt` becomes
 * `results/{sample}/{replicate}/{normalisation}/{count_threshold}/output.txt`
 
-...and so on. If you settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with very large numbers of files (say, one per human gene), multiple iterations clutter up your filesystem over time and stir the bloodlust of your HPC team. To my knowledge `snakemake` provides no way of cleaning these files up.
+...and so on. If you settle on the third of those output paths, the first two files will be left in the `results` directory tree. When working with a very large number of files (say, one per human gene), multiple iterations clutter up your filesystem over time and stir the bloodlust of your HPC team. To my knowledge `snakemake` provides no way of cleaning these files up.
 
-`snakeprune` ingests the workflow by invoking a small extractor script via subprocess in the workflow's own Python environment, builds a regex pattern per file a rule produces (its `output`, `log`, and `benchmark` paths), walks the project's `results/` tree, and reports files that match no pattern. `snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
+`snakeprune`:
+- ingests the `snakemake` workflow
+- builds regex patterns from `rule` output files
+- walks the project's `results/` tree
+- reports files that match no pattern
 
-As with any program intended to delete files: USE AT YOUR OWN RISK!
+`snakeprune` can delete these files or move them to a designated trash directory whilst preserving the same output path from `results` onwards.
+
+As with any program intended to delete files: USE AT YOUR OWN RISK! And, as ever, RTFM.
 
 ## Install
 
-`snakeprune` itself is a small pure-Python CLI. It is not on PyPI; install it straight from GitHub. The recommended way is [`pipx`](https://pipx.pypa.io/), so it lives in its own isolated env and works against any workflow:
+`snakeprune` is a small pure-Python CLI.
 
 ```bash
 pipx install git+https://github.com/twillis209/snakeprune.git
